@@ -6,7 +6,9 @@
 //                          the thread's Cpu, rt_svc runs on the host stack, the registers come back
 //   mrs/msr tpidr_el0   -> the guest's TPIDR_EL0 in its Cpu (bionic's TLS stays in the real register)
 //   mrs tpidrro_el0     -> the guest's TPIDRRO_EL0 (its ThreadLocalRegion) from its Cpu
-//   mrs cntpct_el0      -> mrs cntvct_el0 (the virtual counter: readable by apps; 19.2 MHz on Snapdragon, as the Switch)
+//   mrs cntvct_el0      -> the tick scaled to the Switch's 19.2 MHz (the counter's own frequency: a MediaTek at
+//                           13000000 gives ticks * 19200000 / cntfrq - the game's timing was off, "NOT the Switch's");
+//   mrs cntfrq_el0      -> 19200000 (the Switch's 19.2 MHz: the frequency the game's clock is built on)
 // x18 is left alone: the game uses it as an ordinary register (~38,000 places), and Linux keeps it across context
 // switches; the gates give the host its own x18 back while C runs (bionic's shadow call stack lives there).
 // Host functions (HLE: NVN, rtld's callbacks, imports) keep their fake addresses at HLE_BASE, now real code: each
@@ -88,6 +90,14 @@ void native_call(Cpu *c, uint64_t addr) {
 // ---- the gates' C side (on the host stack; c holds the guest's registers)
 void native_svc_c(Cpu *c, uint32_t imm) { rt_svc(c, imm, c->x[30]); }
 
+void native_cntvct_c(Cpu *c, uint32_t n, uint64_t mode) {
+    // The mrs gate's C side: the answer goes back in the register the game read it from (the gate restores all
+    // the others from the Cpu, and NZCV). mrs xN, cntfrq_el0 -> the Switch's 19.2 MHz (the frequency the game's clock
+    // is built on); mrs xN, cntvct_el0 -> the counter's raw value at the device's own frequency, scaled to the
+    // Switch's tick (fixed point, no division on the hot path).
+    c->x[n] = mode ? 19200000ull : native_ticks();
+}
+
 HostFn hle_slot_fn(uint64_t pc);  // dispatch.c
 void native_hle_c(Cpu *c, uint32_t i) {
     rt_unwind_point();
@@ -114,6 +124,7 @@ static uint32_t enc_ldr(int t, int n, int off) { return 0xF9400000u | ((uint32_t
 #define MSR_TPIDR 0xD51BD040u
 #define MRS_CNTPCT 0xD53BE020u
 #define MRS_CNTVCT 0xD53BE040u
+#define MRS_CNTFRQ 0xD53BE000u
 
 // One stub per site, 80 bytes (16-aligned: the literal at +40 / +72). The svc's frame: [sp] x16, x17, [sp + 16] x30,
 // [sp + 24] the svc number, [sp + 32] a third register for native_svc_gate.
@@ -156,6 +167,25 @@ static uint64_t stub_tls(uint32_t *s, uint64_t at, uint64_t site, int n, int off
     s[16] = enc_b(at + 64, site + 4);
     s[17] = 0xD503201Fu;                                        // nop (the literal 8-aligned)
     memcpy(&s[18], &(uint64_t){(uint64_t)(uintptr_t)g_native_tab}, 8);
+    return 80;
+}
+// mrs xN, cntvct_el0 (the counter: its raw value at the device's own frequency -> the scaled tick) or mrs xN,
+// cntfrq_el0 (the frequency: the Switch's 19.2 MHz, mode 1). The frame is the svc gate's; x17 = the mrs's destination
+// register, x2 = the mrs's source (0: cntvct, 1: cntfrq). The gate runs native_cntvct_c and brings the answer back in
+// the destination, the other registers and NZCV (and the FP/SIMD) as they were.
+static uint64_t stub_cntvct(uint32_t *s, uint64_t at, uint64_t site, uint32_t n, uint32_t mode) {
+    s[0] = 0xD100C3FFu;                                        // sub sp, sp, #48
+    s[1] = enc_stp(16, 17, SP, 0);                            // stp x16, x17, [sp]
+    s[2] = enc_str(30, SP, 16);                               // str x30, [sp, #16]
+    s[3] = 0xD2800011u | (n << 5);                            // movz x17, #n
+    s[4] = 0xD2800000u | ((mode & 0x7FFFu) << 5) | 2;        // movz x2, #mode
+    s[5] = enc_ldr_lit(16, at + 20, at + 72);               // ldr x16, =native_cntvct_gate
+    s[6] = 0xD63F0200u;                                       // blr x16
+    s[7] = enc_ldp(16, 17, SP, 0);                           // ldp x16, x17, [sp]
+    s[8] = enc_ldr(30, SP, 16);                              // ldr x30, [sp, #16]
+    s[9] = 0x9100C3FFu;                                       // add sp, sp, #48
+    s[10] = enc_b(at + 40, site + 4);                        // b site+4
+    memcpy(&s[18], &(uint64_t){(uint64_t)(uintptr_t)native_cntvct_gate}, 8);
     return 80;
 }
 
@@ -245,7 +275,8 @@ static void prepare_module(Module *m) {
     uint64_t nw = m->text_size / 4, nsites = 0;
     for (uint64_t i = 0; i < nw; i++) {
         uint32_t w = text[i];
-        if ((w & 0xFFE0001Fu) == 0xD4000001u || (w & ~31u) == MRS_TPIDR || (w & ~31u) == MRS_TPIDRRO || (w & ~31u) == MSR_TPIDR)
+        if ((w & 0xFFE0001Fu) == 0xD4000001u || (w & ~31u) == MRS_TPIDR || (w & ~31u) == MRS_TPIDRRO || (w & ~31u) == MSR_TPIDR
+            || (w & ~31u) == MRS_CNTPCT || (w & ~31u) == MRS_CNTFRQ)
             nsites++;
     }
     bool is_main = m->base == MAIN_BASE;
@@ -263,7 +294,8 @@ static void prepare_module(Module *m) {
         else if ((w & ~31u) == MRS_TPIDRRO) len = stub_tls((uint32_t *)(uintptr_t)at, at, site, w & 31, 288, false), ntls++;
         else if ((w & ~31u) == MRS_TPIDR) len = stub_tls((uint32_t *)(uintptr_t)at, at, site, w & 31, 280, false), ntls++;
         else if ((w & ~31u) == MSR_TPIDR) len = stub_tls((uint32_t *)(uintptr_t)at, at, site, w & 31, 280, true), ntls++;
-        else if ((w & ~31u) == MRS_CNTPCT) { text[i] = MRS_CNTVCT | (w & 31); ncnt++; continue; }
+        else if ((w & ~31u) == MRS_CNTFRQ) { len = stub_cntvct((uint32_t *)(uintptr_t)at, at, site, w & 31, 1); ncnt++; }
+        else if ((w & ~31u) == MRS_CNTPCT) { len = stub_cntvct((uint32_t *)(uintptr_t)at, at, site, w & 31, 0); ncnt++; }
         if (!len) continue;
         text[i] = enc_b(site, at);
         at += len;
@@ -308,19 +340,28 @@ static void prepare_hle(void) {
         FATAL("[native] the HLE slots can't be made executable (errno %d)\n", errno);
 }
 
+// The Switch's tick: the counter the rewritten reads see (rt_ticks, kernel.c). The device's counter doesn't always
+// run at the Switch's 19.2 MHz (a MediaTek at 13000000 on a Xiaomi 15T: the game's timing was off), so the raw
+// counter is scaled to the Switch's tick - fixed point, no division on the hot path: ticks * g_native_tick_mul >> 32
+// = ticks * 19200000 / cntfrq (Q32: g_native_tick_mul = 19200000 * 2^32 / cntfrq; when cntfrq is 19200000, mul = 2^32
+// and the tick goes through unchanged).
+static uint64_t g_native_tick_mul = 1ull << 32;
+static uint64_t native_tick_raw(void) { uint64_t v; __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v)); return v; }
+uint64_t native_ticks(void) { return (uint64_t)(((__uint128_t)native_tick_raw() * g_native_tick_mul) >> 32); }
+
 void native_prepare(void) {
     if (!native_on()) return;
     uint64_t f;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
+    g_native_tick_mul = f ? (uint64_t)(((__uint128_t)19200000ull << 32) / f) : (1ull << 32);
     LOG("[native] the game's code runs on the CPU (counter %llu Hz%s)\n", (unsigned long long)f,
         f == 19200000 ? ", as the Switch's" : ": NOT the Switch's 19.2 MHz - the game's timing will be off");
+    LOG("[native] tick factor applied: ticks x 19200000 / %llu Hz\n", (unsigned long long)f);
     memset(g_native_tab, 0, sizeof g_native_tab);
     for (int i = 0; i < g_nmodules; i++) prepare_module(&g_modules[i]);
     prepare_hle();
 }
 
-// The Switch's tick: the counter the rewritten reads see (rt_ticks, kernel.c)
-uint64_t native_ticks(void) { uint64_t v; __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v)); return v; }
 #else
 #include "rt.h"
 bool native_wanted(void) { return false; }
