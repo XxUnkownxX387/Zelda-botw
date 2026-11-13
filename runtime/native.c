@@ -37,7 +37,6 @@ static pthread_mutex_t tab_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void native_enter(Cpu *c, uint64_t addr);  // native_gate.S
 extern char native_svc_gate[], native_hle_gate[];
-extern char native_cntvct_gate[];
 
 // Chosen per boot (main.c boot): the setting (Native game code), or LARECOMP_NATIVE=0/1 over it
 static bool g_on;

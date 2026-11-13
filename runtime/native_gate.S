@@ -240,8 +240,10 @@ native_svc_gate:
 // From an mrs cntvct_el0 / cntfrq_el0 stub (native.c stub_cntvct): the frame is the svc gate's (sub sp, #48; [sp] x16, x17;
 // [sp + 16] x30; [sp + 24] the mrs's destination register; [sp + 32] x15), x2 = the mrs's source (0: cntvct, the counter at
 // the device's own frequency - its raw value scaled to the Switch's tick; 1: cntfrq, the Switch's 19.2 MHz). Every register
-// goes into the Cpu (and NZCV, the FP/SIMD), native_cntvct_c runs on the host stack, and they all come back from the Cpu:
+// goes into the Cpu (and NZCV), native_cntvct_c runs on the host stack, and they all come back from the Cpu:
 // the tick (scaled, or the frequency) goes back in the destination, all the others as they were.
+// The FP/SIMD save/restore is not here: an mrs only writes its destination, and native_cntvct_c is integer-only
+// (the tick is scaled with the Q32 factor), so the guest's q registers pass through the C call untouched.
     .globl native_cntvct_gate
     .hidden native_cntvct_gate
     .type native_cntvct_gate, %function
@@ -260,7 +262,6 @@ native_cntvct_gate:
     str x0, [x16, #C_SP]
     mrs x0, nzcv
     str x0, [x16, #C_NZCV]
-    SAVE_Q 32, x16, x0
     str x30, [x16, #C_GATE_RET]
     mov x19, x16
     ldr w1, [sp, #24]
@@ -274,7 +275,6 @@ native_cntvct_gate:
     sub sp, x0, #48
     ldr x0, [x16, #C_NZCV]
     msr nzcv, x0
-    LOAD_Q 32, x16, x0
     ldr x30, [x16, #C_GATE_RET]
     LOAD_GUEST_X x16
     ret
