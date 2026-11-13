@@ -87,19 +87,30 @@ void native_call(Cpu *c, uint64_t addr) {
     c->x[30] = lr;
 }
 
+// ---- the gates' counters (runtime/native.c: the hot path's profile - how many times each gate fired. The values
+// go through native_gate_counts; the game reads them like the other native_* helpers, rt.h)
+static uint64_t g_gate_svc, g_gate_cntvct, g_gate_hle, g_gate_fix;
+__attribute__((visibility("hidden"))) void native_gate_counts(uint64_t *svc, uint64_t *cntvct, uint64_t *hle, uint64_t *fix) {
+    if (svc) *svc = (uint64_t)__atomic_load_n(&g_gate_svc, __ATOMIC_RELAXED);
+    if (cntvct) *cntvct = (uint64_t)__atomic_load_n(&g_gate_cntvct, __ATOMIC_RELAXED);
+    if (hle) *hle = (uint64_t)__atomic_load_n(&g_gate_hle, __ATOMIC_RELAXED);
+    if (fix) *fix = (uint64_t)__atomic_load_n(&g_gate_fix, __ATOMIC_RELAXED);
+}
 // ---- the gates' C side (on the host stack; c holds the guest's registers)
-void native_svc_c(Cpu *c, uint32_t imm) { rt_svc(c, imm, c->x[30]); }
+void native_svc_c(Cpu *c, uint32_t imm) { __atomic_fetch_add(&g_gate_svc, 1, __ATOMIC_RELAXED); rt_svc(c, imm, c->x[30]); }
 
 void native_cntvct_c(Cpu *c, uint32_t n, uint64_t mode) {
     // The mrs gate's C side: the answer goes back in the register the game read it from (the gate restores all
     // the others from the Cpu, and NZCV). mrs xN, cntfrq_el0 -> the Switch's 19.2 MHz (the frequency the game's clock
     // is built on); mrs xN, cntvct_el0 -> the counter's raw value at the device's own frequency, scaled to the
     // Switch's tick (fixed point, no division on the hot path).
+    __atomic_fetch_add(&g_gate_cntvct, 1, __ATOMIC_RELAXED);
     c->x[n] = mode ? 19200000ull : native_ticks();
 }
 
 HostFn hle_slot_fn(uint64_t pc);  // dispatch.c
 void native_hle_c(Cpu *c, uint32_t i) {
+    __atomic_fetch_add(&g_gate_hle, 1, __ATOMIC_RELAXED);
     rt_unwind_point();
     HostFn f = hle_slot_fn(HLE_BASE + 16ull * i);
     f(c);
@@ -242,7 +253,7 @@ static const Fix fixes[] = {  // (canonical addresses, 0x7000000000 + the offset
     {190, 0x7000eb4a28, 0, 0xbd40b000, fix_persp_aspect, "projection aspect"},
     {190, 0x700120bc48, 0, 0xf9404500, fix_tag_null, "tag check, no target yet"},
 };
-int native_patch_c(Cpu *c, uint32_t i) { return fixes[i].fn(c); }
+int native_patch_c(Cpu *c, uint32_t i) { __atomic_fetch_add(&g_gate_fix, 1, __ATOMIC_RELAXED); return fixes[i].fn(c); }
 
 static uint64_t stub_fix(uint32_t *s, uint64_t at, uint64_t site, uint32_t id, uint32_t orig, uint64_t alt) {
     const uint32_t pop[3] = {enc_ldp(16, 17, SP, 0), enc_ldr(30, SP, 16), 0x9100C3FFu};  // (the frame back, add sp #48)

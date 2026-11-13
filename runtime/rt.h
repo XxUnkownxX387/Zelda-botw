@@ -119,6 +119,7 @@ void native_prepare(void);                // the loaded modules rewritten and ma
 void native_call(Cpu *c, uint64_t addr);  // guest_call's native path
 void native_thread_end(void);
 uint64_t native_ticks(void);
+void native_gate_counts(uint64_t *svc, uint64_t *cntvct, uint64_t *hle, uint64_t *fix);  // the gates' counters (native.c)
 uint64_t guest_sym(const char *name);     // cached loader_find_symbol, fatal if missing
 void *hle_alloc(uint64_t size);           // zeroed guest-visible memory (never freed)
 extern const char *g_romfs_dir;

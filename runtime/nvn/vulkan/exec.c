@@ -395,6 +395,14 @@ void vk_pace_frame(void) {
 #endif
         le = cum_exec, lu = prof_up_cum;
     }
+    static int logg = -1;  // LARECOMP_LOG_GATES=1: the gates' counters (runtime/native.c)
+    if (logg < 0) logg = getenv("LARECOMP_LOG_GATES") != NULL;
+    if (logg) {
+        uint64_t gsvc, gcnt, ghle, gfix;
+        native_gate_counts(&gsvc, &gcnt, &ghle, &gfix);
+        LOG("[native] gates: svc %llu, cntvct %llu, hle %llu, fix %llu\n", (unsigned long long)gsvc, (unsigned long long)gcnt,
+            (unsigned long long)ghle, (unsigned long long)gfix);
+    }
 #ifdef __ANDROID__
     // (or one that missed its vsync, whatever held it: with the render thread both halves can fit and the frame still
     // take two vsyncs - slow motion all the same)
