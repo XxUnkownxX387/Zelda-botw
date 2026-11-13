@@ -352,9 +352,14 @@ void vk_pace_frame(void) {
         // Three quarters of the frame, not all of it: the governor lowers the clocks until the work just fits its
         // target, and a phone whose frames weigh near 33 ms then went over it every few frames - each a vsync late, 50
         // ms: 17-20 fps at any quality where 0.2.6 held 30 (Mali-G925, #89; 0.2.9 brought the 33 ms budget)
+        extern int framepace_forced(void);
         bool fixed30 = g_settings.fps_mode == 1 && AB("adpf30") != 1;
-        uint64_t budget = g_settings.fps_mode == 3 ? 37500000ull  // (Frame rate 20: 20 fps's, three quarters)
-                          : (follow && pace_slow) || fixed30 ? 25000000ull : 16666667ull;
+        uint64_t budget;
+        if (framepace_forced() > 0)  // (the experimental hard pace: its own budget, three quarters of its frame)
+            budget = (uint64_t)((1000000000ull / (uint64_t)framepace_forced()) * 3 / 4);
+        else if (g_settings.fps_mode == 3) budget = 37500000ull;  // (Frame rate 20: 20 fps's, three quarters)
+        else if ((follow && pace_slow) || fixed30) budget = 25000000ull;
+        else budget = 16666667ull;
         static double budget30 = -1;  // (LARECOMP_ADPF30_MS=<ms>, a test: the 30 fps budget instead of 25 ms)
         if (budget30 < 0) budget30 = getenv("LARECOMP_ADPF30_MS") ? atof(getenv("LARECOMP_ADPF30_MS")) : 0;
         if (budget30 > 0 && budget == 25000000ull) budget = (uint64_t)(budget30 * 1e6);
@@ -440,7 +445,10 @@ void vk_pace_frame(void) {
     idx = (idx + 1) % 60;
     if (!pace_on) return;  // (measured and counted all the same: LARECOMP_LOG_PACE, the stats)
 #ifdef __ANDROID__
-    if (g_settings.fps_mode) {  // (Video: Frame rate 20 / 30 / 40-45 / 60) fixed: no measuring, no trials
+    // Fixed: the setting (Video > Frame rate), or an experimental hard pace from the environment (LARECOMP_FPS=<n>):
+    // the forced rate's own pace, no measuring, no trials - the auto's slow motion can't take a hard pace back.
+    if (g_settings.fps_mode || framepace_forced() > 0) {  // (Video: Frame rate 20 / 30 / 40-45 / 60) fixed: no measuring, no trials - LARECOMP_FPS=<n>
+        extern int framepace_forced(void);
         extern int vk_between_fps(void);
         bool slow = g_settings.fps_mode == 1 || g_settings.fps_mode == 3;
         if (slow != pace_slow)
@@ -2560,11 +2568,40 @@ static void subst_glsl(ShaderInfo *si, uint64_t addr, const char *suffix) {
 }
 #endif
 
+typedef struct { Prog *p; uint32_t **out; size_t *n; } FsArgs;  // (the fragment stage's SPIR-V out-params, for its own thread)
+static void *fs_compile_thread(void *a) {
+    FsArgs *j = (FsArgs *)a;
+    j->out[0] = vk_glsl_to_spirv(j->p->fi->msl, STAGE_FRAGMENT, "fs", j->n);
+    return NULL;
+}
+
 static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
-    uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
-    uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
+    uint32_t *sv = NULL, *sf = NULL;
+    bool par = false;
+#ifdef LARECOMP_SHADER_PARALLEL
+    // (experimental LARECOMP_SHADER_PARALLEL=1: the fragment shader's SPIR-V compiles on its own thread while the
+    // vertex stage's compiles here - the two stages rarely overlap otherwise, and the first use of a new shader pair
+    // waits on both: a hitch that pushed a frame past the pace's budget was the one that broke the constant 40 fps)
+    static int par_i = -1;
+    if (par_i < 0) par_i = getenv("LARECOMP_SHADER_PARALLEL") != NULL;
+    par = par_i;
+#endif
+    if (par) {
+        FsArgs *j = (FsArgs *)malloc(sizeof *j);
+        j->p = p; j->out = &sf; j->n = &nf;
+        pthread_t tf;
+        if (pthread_create(&tf, NULL, fs_compile_thread, j) == 0) {
+            sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
+            pthread_join(tf, NULL);
+            free(j);
+        } else {  // (fall back on the sequential path)
+            par = false;
+            sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
+        }
+    } else sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
+    if (!par && sv) sf = vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf);
     if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);

@@ -6,6 +6,9 @@
 // The frame rate the runtime paces to now, frames per second (0: no limit): the setting (Video > Frame rate), 30
 // in the menus, the events and while a movie plays.
 int framepace_target(void);
+// An experimental hard frame rate from the environment (LARECOMP_FPS=<n>: n > 0 fixes the pace, the auto's slow motion
+// can't take it back - the setting is still what counts for the menus / events / movies).
+int framepace_forced(void);
 // The time between presents for it, nanoseconds (no limit: 1/300 s).
 uint64_t framepace_period_ns(void);
 // true: the runtime paces the presents and sets the game's clock (1.8.2; LARECOMP_FRAMEPACE=0: the game's own pacing)

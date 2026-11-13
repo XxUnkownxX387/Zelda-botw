@@ -117,6 +117,15 @@ int framepace_target(void) {
     return fps;
 }
 
+// An experimental hard frame rate from the environment (LARECOMP_FPS=<n>): n > 0 fixes the pace at n fps - the auto's
+// slow motion can't take it back. (The setting is still what caps the menus / events / movies; this is the hard pace
+// the player asks for, for a phone whose GPU can hold it: 40 fps even in its heavy zones, for instance).
+int framepace_forced(void) {
+    static int f = -2;
+    if (f == -2) f = env_int("LARECOMP_FPS", -1);
+    return f;
+}
+
 // No limit still stops at 300 fps: shorter steps lose precision in the game's float clocks (the time of day, 0..360,
 // takes 1/30 of a minute times the step each frame).
 #define FPS_CEILING 300
