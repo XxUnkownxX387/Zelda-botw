@@ -74,7 +74,27 @@ jobs:
         run: |
           cd android/botwrecompandroid
           chmod +x gradlew
-          ./gradlew assembleDebug
+          set -o pipefail
+          ./gradlew assembleDebug --continue 2>&1 | tee build.log
+
+      - name: List all CMake build errors
+        if: failure()
+        run: |
+          BUILD_DIR=$(find android -type d -path "*/.cxx/Debug/*/arm64-v8a" | head -1)
+          echo "Using CMake build directory: $BUILD_DIR"
+          cd "$BUILD_DIR"
+          ninja -k 0 2>&1 | tee ninja-all-errors.log
+          grep -E "error:" ninja-all-errors.log | sort -u >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            android/botwrecompandroid/build.log
+            **/ninja-all-errors.log
+          if-no-files-found: warn
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

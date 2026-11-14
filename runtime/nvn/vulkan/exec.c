@@ -447,8 +447,8 @@ void vk_pace_frame(void) {
 #ifdef __ANDROID__
     // Fixed: the setting (Video > Frame rate), or an experimental hard pace from the environment (LARECOMP_FPS=<n>):
     // the forced rate's own pace, no measuring, no trials - the auto's slow motion can't take a hard pace back.
+    extern int framepace_forced(void);
     if (g_settings.fps_mode || framepace_forced() > 0) {  // (Video: Frame rate 20 / 30 / 40-45 / 60) fixed: no measuring, no trials - LARECOMP_FPS=<n>
-        extern int framepace_forced(void);
         extern int vk_between_fps(void);
         bool slow = g_settings.fps_mode == 1 || g_settings.fps_mode == 3;
         if (slow != pace_slow)
