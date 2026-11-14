@@ -1243,6 +1243,8 @@ static void run_job(void (*fn)(void *), void *arg) {
 #ifdef __ANDROID__
         n = cores / 2;
         if (n > 4) n = 4;  // leave CPU capacity for the game and Vulkan translation
+        if (g_vk.props.vendorID == 0x13B5) n = 6;  // Mali (ARM, Mali-G720): its stage compiles are long - a few more workers
+                                   // for the bursts of first-time pipelines (an area entry: dozens of compiles at once)
 #endif
         const char *workers = getenv("LARECOMP_SHADER_WORKERS");
         if (workers) n = atoi(workers);
