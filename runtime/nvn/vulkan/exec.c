@@ -1809,7 +1809,7 @@ static void wb_apply(uint64_t done) {
     pthread_mutex_unlock(&wb_lock);
 }
 
-TexBackend *g_dump_sampled;  // (LARECOMP_DUMP_SAMPLED: the texture to dump after the pass)
+const TexBackend *g_dump_sampled;  // (LARECOMP_DUMP_SAMPLED: the texture to dump after the pass)
 NvnTexture *g_pass_t0;  // (the open pass's first color target and its layer: LARECOMP_DUMP_AFTER_LAYER)
 int g_pass_layer;
 static void dump_layers_raw(TexBackend *b) {  // every layer, level 0, as stored (R8 / R16 / RGBA8 / RGBA16F...)
@@ -1893,7 +1893,7 @@ static void vk_end_pass_at(int line) {
     if (prof && line < 4096) prof_end_line[line]++;
     vk_end_rendering(vk_cmd());
     in_pass = false;
-    {   extern TexBackend *g_dump_sampled;
+    {   extern const TexBackend *g_dump_sampled;
         if (g_dump_sampled) { TexBackend *db = g_dump_sampled; g_dump_sampled = NULL; dump_layers_raw(db); }
     }
     {   // LARECOMP_DUMP_AFTER_LAYER=<n>: the watched texture's layers (level 0) right after the first pass into layer n
@@ -4653,10 +4653,10 @@ bool vk_heap_place(uint64_t size) {
         }
         vkGetBufferMemoryRequirements(g_vk.dev, buf, &mr);
         type = -1;  // host-visible and coherent (the CPU writes, the GPU reads and writes); cached when there is one
-        // Only consider memory types that are BOTH in the buffer's requirements AND support the external handle type.
-        uint32_t compatible_types = mr.memoryTypeBits & ext_props.externalMemoryProperties.compatibleMemoryTypes;
+        // The buffer's memoryTypeBits is already filtered by the driver for the external handle type
+        // we requested via VkExternalMemoryBufferCreateInfo. Just use it directly.
         for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
-            if (!(compatible_types & (1u << i))) continue;
+            if (!(mr.memoryTypeBits & (1u << i))) continue;
             VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
             if ((f & need) != need) continue;
             if (type < 0 || (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) type = (int)i;
@@ -4665,13 +4665,10 @@ bool vk_heap_place(uint64_t size) {
         // For Mali on dma-buf: if no host-visible type found, the mmap at HEAP_BASE will fail.
         // Don't proceed with invalid type - try opaque fd instead, or AHardwareBuffer.
         if (type < 0 && memfd && g_vk.mem_dmabuf && ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
-            LOG("[vk] Mali: dma-buf offers no host-visible memory type (types 0x%x, compat 0x%x) - trying opaque fd\n",
-                mr.memoryTypeBits, ext_props.externalMemoryProperties.compatibleMemoryTypes);
+            LOG("[vk] Mali: dma-buf offers no host-visible memory type (types 0x%x) - trying opaque fd\n",
+                mr.memoryTypeBits);
             vkDestroyBuffer(g_vk.dev, buf, NULL);
             ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
-            // Re-query for opaque fd
-            ext_info.handleType = ht;
-            vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
             dma_buf_failed = 1;
             continue;
         }
