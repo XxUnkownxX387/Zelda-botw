@@ -4698,9 +4698,10 @@ bool vk_heap_place(uint64_t size) {
         if (mem) vkFreeMemory(g_vk.dev, mem, NULL);  // (freeing a placed map unmaps it: the window gets its pages back)
         if (p == (void *)(uintptr_t)HEAP_BASE) plat_reset_guest(HEAP_BASE, HEAP_BASE + size);
         vkDestroyBuffer(g_vk.dev, buf, NULL);
-        // Mali fallback: try AHardwareBuffer (Android hardware buffer) when dma-buf/opaque fd mmap fails
-        if (mali && g_vk.mem_ahb && !getenv("LARECOMP_VK_NO_AHB")) {
-            LOG("[vk] Mali: trying AHardwareBuffer heap import...\n");
+        // Mali fallback: try AHardwareBuffer (Android hardware buffer) when dma-buf/opaque fd mmap fails.
+        // Opt-in only (LARECOMP_VK_AHB=1) until tested - the 3 GB heap may exceed AHB limits on r49p1.
+        if (mali && g_vk.mem_ahb && getenv("LARECOMP_VK_AHB")) {
+            LOG("[vk] Mali: trying AHardwareBuffer heap import (opt-in)...\n");
             if (vk_heap_place_ahb(size)) return true;
         }
         return NOT_PLACED();
