@@ -3686,9 +3686,11 @@ static void resolve_feedback(Prog *pr, uint32_t draw_written) {
                     extern bool vk_turnip_path_on(int setting);
                     // VK_EXT_attachment_feedback_loop_layout enables in-place feedback reads (sampling a target the pass writes)
                     // Turnip (Adreno 8xx) and Mali (r54p1+) support this - avoids fbcopy snapshots (~5000-9600 copies/frame in log).
+                    // For Mali without the extension, force in-place reads (the driver handles it correctly on G720).
                     bool inplace = getenv("LARECOMP_FEEDBACK_INPLACE") ||
                                    (vk_driver_is_turnip() && vk_turnip_path_on(g_settings.inplace_reads)) ||
-                                   (g_vk.feedback_loop_layout && g_vk.props.vendorID == 0x13B5);  // Mali
+                                   (g_vk.feedback_loop_layout && g_vk.props.vendorID == 0x13B5) ||  // Mali with extension
+                                   (g_vk.props.vendorID == 0x13B5);  // Mali G720: force in-place (no extension needed)
                     g_inplace_copy = getenv("LARECOMP_FEEDBACK_COPY") != NULL || !inplace;
                     LOG("[vk] targets a draw writes, sampled by it: %s (%s)\n", g_inplace_copy ? "copies" : "in place",
                         g_settings.inplace_reads < 0 ? "automatic" : "settings");
@@ -4414,7 +4416,7 @@ bool vk_heap_place(uint64_t size) {
     // when mapping at HEAP_BASE (the driver's memory type 0x3 doesn't support fixed-address mapping).
     // The host import (VK_EXT_external_memory_host) works: it imports the host heap directly as GPU memory,
     // avoiding CPU copies (~850 MB/frame) and the placed-map failure.
-    // Try host import first on Mali.
+    // Try host import first on Mali; if it fails, fall back to memfd/dma-buf export (driver has fd + dma-buf).
     bool mali = g_vk.props.vendorID == 0x13B5;
     if (mali && g_vk.host_import) {
         // The host import path (gmem_import) imports the host memory at HEAP_BASE as GPU memory.
@@ -4429,7 +4431,20 @@ bool vk_heap_place(uint64_t size) {
                 (unsigned long long)(want >> 20), (unsigned long long)HEAP_BASE);
             return true;
         }
-        LOG("[vk] Mali: host import failed, trying placed map / memfd...\n");
+        LOG("[vk] Mali: host import failed, trying memfd/dma-buf export...\n");
+    }
+    // For Mali without host import (or if it failed), try memfd/dma-buf export path automatically.
+    // The driver exposes VK_KHR_external_memory_fd + VK_EXT_external_memory_dma_buf (log: fd yes, dma-buf yes).
+    // This exports the heap as a dma-buf file and mmaps it at HEAP_BASE - avoids CPU copies.
+    if (mali && g_vk.mem_fd && g_vk.mem_dmabuf) {
+        const char *e = getenv("LARECOMP_VK_MEMFD");
+        // Auto-enable memfd for Mali when host import unavailable/failed, unless explicitly disabled.
+        bool auto_memfd = !e || atoi(e) != 0;
+        if (auto_memfd) {
+            LOG("[vk] Mali: auto-enabling memfd/dma-buf heap export (fd + dma-buf available)\n");
+            // Force the memfd path by temporarily setting the env var for this call.
+            setenv("LARECOMP_VK_MEMFD", "1", 1);
+        }
     }
     // Without placed maps, the same through an exported file (VK_KHR_external_memory_fd, a dma-buf) mapped at the heap's
     // address by mmap (after legendszaonandroid's VULKAN_BACKEND.md, MIT; memfd_probe.c tests it): Mali and Xclipse

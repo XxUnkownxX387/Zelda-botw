@@ -58,7 +58,7 @@ Settings g_settings = {
     .fps_mode = 1,  // (30: the game's own choice dropped the overworld to 20, where the GPU's clocks settled low)
     .framegen = false,  // (the frame generation: the frames between two real ones are generated, the chosen rate doubled -
                         // vulkan/framegen.c; off: the frames are the real ones)
-    .shader_parallel = false,  // (the experimental parallel shader-stage compile: Mali - the Mali-G720 - defaults it on)
+    .shader_parallel = true,  // (the experimental parallel shader-stage compile: Mali - the Mali-G720 - defaults it on)
     .res_mode = 1,  // (1x: the Switch's 900p scene, the HUD at the screen's resolution - Match display drew the scene at
                     // 2560x1440 on the POCO F7 Ultra: 22 fps)
 #else
