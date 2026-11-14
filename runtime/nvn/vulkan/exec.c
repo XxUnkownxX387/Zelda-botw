@@ -2601,6 +2601,8 @@ static void compile_program(void *arg) {
         if (e) par = atoi(e) != 0;
         else if (g_vk.props.vendorID == 0x13B5) par = true;
     }
+    uint64_t t0 = plat_now_ns();
+    LOG("[vk] compile vs %llx fs %llx par %d (started)\n", (unsigned long long)p->code[0], (unsigned long long)p->code[1], par);
     if (par) {
         FsArgs *j = (FsArgs *)malloc(sizeof *j);
         j->p = p; j->out = &sf; j->n = &nf;
@@ -2615,7 +2617,8 @@ static void compile_program(void *arg) {
         }
     } else sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     if (!par && sv) sf = vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf);
-    if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
+    if (!sv || !sf) { LOG("[vk] compile vs %llx fs %llx par %d: translate failed (%.1f ms)\n", (unsigned long long)p->code[0], (unsigned long long)p->code[1], par,
+        (double)(plat_now_ns() - t0) / 1e6); free(sv); free(sf); atomic_store(&p->state, 2); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
     p->vs = vk_module(sv, nv);
@@ -2626,6 +2629,8 @@ static void compile_program(void *arg) {
         if (p->vs) vkDestroyShaderModule(g_vk.dev, p->vs, NULL);
         if (p->fs) vkDestroyShaderModule(g_vk.dev, p->fs, NULL);
         p->vs = p->fs = VK_NULL_HANDLE;
+        LOG("[vk] compile vs %llx fs %llx par %d: modules failed (%.1f ms)\n", (unsigned long long)p->code[0], (unsigned long long)p->code[1], par,
+            (double)(plat_now_ns() - t0) / 1e6);
         atomic_store(&p->state, 2);
         return;
     }
@@ -2652,6 +2657,8 @@ static void compile_program(void *arg) {
     p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
     atomic_fetch_add(&stat_compiles, 1);
     atomic_fetch_add(&live_programs, 1);
+    LOG("[vk] compile vs %llx fs %llx par %d: built (%.1f ms)\n", (unsigned long long)p->code[0], (unsigned long long)p->code[1], par,
+        (double)(plat_now_ns() - t0) / 1e6);
     atomic_store(&p->state, p->vs && p->fs ? 1 : 2);
 }
 
