@@ -18,7 +18,7 @@ android {
     ndkVersion = "30.0.16248370"
 
     defaultConfig {
-        applicationId = "com.botwrecomp.android"
+        applicationId = "com.botwrecomp.android.test"
         minSdk = 30
         targetSdk = 36
         versionCode = 38
@@ -63,6 +63,12 @@ android {
     }
 
     signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (releaseKey.exists()) create("release") {
             val p = Properties().apply { releaseKey.inputStream().use { load(it) } }
             storeFile = file(p.getProperty("storeFile"))
@@ -73,6 +79,9 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         getByName("release") {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
