@@ -4340,7 +4340,9 @@ static bool gmem_placed_(void) { return gmem_placed; }
 static uint64_t cbwin_row_(uint64_t addr, uint64_t size) { return cbwin_rows(addr, size); }
 #endif
 
-static bool gmem_import(uint64_t size) {
+// Mali host import path: imports the host heap at HEAP_BASE as GPU memory (VK_EXT_external_memory_host).
+// Non-static so vk_heap_place can call it for Mali.
+bool gmem_import(uint64_t size) {
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
@@ -4404,6 +4406,27 @@ bool vk_heap_place(uint64_t size) {
     // isn't an Adreno 8xx (Automatic) had neither: every vertex and index buffer copied each frame, ~150 MB, 7-9 fps
     // on an Adreno 730 (issue #31). A page not tracked yet counts as written, so turning it on late is safe.
 #define NOT_PLACED() (gcopy_mode ? plat_write_tracking_enable(HEAP_BASE, HEAP_BASE + HEAP_MAX) : (void)0, false)
+    // Mali (vendor 0x13B5): the placed-map path (VK_EXT_map_memory_placed) fails with VK_ERROR_OUT_OF_DEVICE_MEMORY
+    // when mapping at HEAP_BASE (the driver's memory type 0x3 doesn't support fixed-address mapping).
+    // The host import (VK_EXT_external_memory_host) works: it imports the host heap directly as GPU memory,
+    // avoiding CPU copies (~850 MB/frame) and the placed-map failure.
+    // Try host import first on Mali.
+    bool mali = g_vk.props.vendorID == 0x13B5;
+    if (mali && g_vk.host_import) {
+        // The host import path (gmem_import) imports the host memory at HEAP_BASE as GPU memory.
+        // It doesn't require placed mapping at a fixed address.
+        uint64_t want = (size + 0xFFFF) & ~0xFFFFull;
+        if (want > HEAP_MAX) want = HEAP_MAX;
+        if (gmem_import(want)) {
+            gmem_placed = false;  // not a placed map, but an import
+            gcopy_mode = false;
+            gwin_mode = want > g_vk.props.limits.maxStorageBufferRange && !getenv("LARECOMP_VK_NO_GWIN");
+            LOG("[vk] Mali: guest heap %llu MB is GPU memory (host import at %llx)\n",
+                (unsigned long long)(want >> 20), (unsigned long long)HEAP_BASE);
+            return true;
+        }
+        LOG("[vk] Mali: host import failed, trying placed map / memfd...\n");
+    }
     // Without placed maps, the same through an exported file (VK_KHR_external_memory_fd, a dma-buf) mapped at the heap's
     // address by mmap (after legendszaonandroid's VULKAN_BACKEND.md, MIT; memfd_probe.c tests it): Mali and Xclipse
     // have neither the placed map nor the import, and their CPU copies with write tracking were slow and ran the

@@ -543,17 +543,23 @@ static void create_device(void) {
     // unless LARECOMP_VK_HOST_IMPORT / LARECOMP_VK_NO_GRES say otherwise; the Mali drivers without the extension (r49p1
     // and older) already go through CPU copies, and keep the arena. Driver compatibility's "Game memory on the GPU" =
     // Off (gpu_heap 0) also leaves the import off on any driver but Turnip (whose Off is the placed heap's alone).
+    // For Mali-G720 (this log: r49p1) the placed-map path fails (VK_ERROR_OUT_OF_DEVICE_MEMORY on map at HEAP_BASE),
+    // but the host import (VK_EXT_external_memory_host) works and avoids CPU copies of ~850 MB/frame.
     bool mali = g_vk.props.vendorID == 0x13B5;
     if (g_vk.host_import) {
         const char *e = getenv("LARECOMP_VK_HOST_IMPORT");
         bool xclipse = strstr(g_vk.props.deviceName, "Xclipse") || g_vk.props.vendorID == 0x144D;  // (Samsung)
         bool by_setting = g_settings.gpu_heap == 0 && !vk_driver_is_turnip();
-        if (mali && !e) setenv("LARECOMP_VK_NO_GRES", "1", 0);
-        if (e ? !atoi(e) : xclipse || mali || by_setting) {
+        // Don't auto-disable for Mali: let the host import path be tried (exec.c vk_heap_place will use it).
+        // LARECOMP_VK_HOST_IMPORT=0 still forces off; LARECOMP_VK_NO_GRES=1 disables the GRES arena.
+        if (mali && !e) {
+            // Mali: try host import (it avoids the placed-map failure at HEAP_BASE).
+            // The old issues (#44 #118 #121) were on r54p1+ Mali-G2/G1/G610; this G720 r49p1 may differ.
+        }
+        if (e ? !atoi(e) : xclipse || by_setting) {
             g_vk.host_import = false;
             LOG("[vk] guest heap import left off (%s)\n", e ? "LARECOMP_VK_HOST_IMPORT=0" :
-                xclipse ? "Xclipse: its first submission fails" :
-                mali ? "Mali: the game's text went missing, and memory ran out" : "settings: game memory on the GPU off");
+                xclipse ? "Xclipse: its first submission fails" : "settings: game memory on the GPU off");
         }
     }
 #endif
