@@ -4401,52 +4401,82 @@ bool vk_heap_file_asked(void) {
 }
 
 // AHardwareBuffer heap placement for Mali (fallback when dma-buf/opaque fd mmap fails).
-// Creates an AHardwareBuffer with the heap size, imports it as host memory, and maps it at HEAP_BASE.
+// Creates an AHardwareBuffer with the heap size, imports it as external memory, and maps it at HEAP_BASE.
+// Starts with smaller size and grows dynamically to avoid 3GB allocation limits on r49p1.
 static bool vk_heap_place_ahb(uint64_t size) {
 #ifdef __ANDROID__
-    // Create AHardwareBuffer
+    // Start with smaller initial allocation (1.5 GB) to avoid r49p1 AHardwareBuffer size limits.
+    // The heap will grow dynamically via gmem_import when the game requests more.
+    uint64_t initial_size = (size > 1536ULL * 1024 * 1024) ? 1536ULL * 1024 * 1024 : size;
+    if (initial_size < 512ULL * 1024 * 1024) initial_size = 512ULL * 1024 * 1024;
+
+    LOG("[vk] Mali AHB: attempting heap import (initial %llu MB, target %llu MB)\n",
+        (unsigned long long)(initial_size >> 20), (unsigned long long)(size >> 20));
+
+    // Create AHardwareBuffer with proper format/usage for large blob storage
     AHardwareBuffer_Desc desc = {
-        .width = (uint32_t)size,
+        .width = (uint32_t)initial_size,
         .height = 1,
         .layers = 1,
         .format = AHARDWAREBUFFER_FORMAT_BLOB,
-        .usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER | AHARDWAREBUFFER_USAGE_CPU_READ_NEVER | AHARDWAREBUFFER_USAGE_CPU_WRITE_NEVER,
+        .usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER,
         .stride = 0,
         .rfu0 = 0,
         .rfu1 = 0
     };
     AHardwareBuffer *ahb = NULL;
     if (AHardwareBuffer_allocate(&desc, &ahb) != 0) {
-        LOG("[vk] Mali AHB: AHardwareBuffer_allocate failed\n");
+        LOG("[vk] Mali AHB: AHardwareBuffer_allocate failed (size %llu MB)\n", (unsigned long long)(initial_size >> 20));
         return false;
     }
+    LOG("[vk] Mali AHB: AHardwareBuffer allocated (%llu MB)\n", (unsigned long long)(initial_size >> 20));
+
+    // Query AHardwareBuffer properties to get correct memory type
+    VkAndroidHardwareBufferPropertiesANDROID ahb_props = {
+        .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID
+    };
+    PFN_vkGetAndroidHardwareBufferPropertiesANDROID get_ahb_props =
+        (PFN_vkGetAndroidHardwareBufferPropertiesANDROID)vkGetDeviceProcAddr(g_vk.dev, "vkGetAndroidHardwareBufferPropertiesANDROID");
+    if (!get_ahb_props || get_ahb_props(g_vk.dev, ahb, &ahb_props) != VK_SUCCESS) {
+        LOG("[vk] Mali AHB: vkGetAndroidHardwareBufferPropertiesANDROID failed\n");
+        AHardwareBuffer_release(ahb);
+        return false;
+    }
+    LOG("[vk] Mali AHB: AHB properties: size %llu MB, memory types 0x%x\n",
+        (unsigned long long)(ahb_props.allocationSize >> 20), ahb_props.memoryTypeBits);
+
     // Import AHardwareBuffer as external memory
     VkExternalMemoryBufferCreateInfo ebi = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
                                             .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID};
-    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &ebi, .size = size,
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &ebi, .size = initial_size,
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
     VkBuffer buf;
     if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) {
+        LOG("[vk] Mali AHB: vkCreateBuffer failed\n");
         AHardwareBuffer_release(ahb);
         return false;
     }
+
+    // Chain: allocate info -> dedicated -> ahb import
     VkMemoryDedicatedAllocateInfoKHR ded = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO_KHR, .buffer = buf};
     VkImportAndroidHardwareBufferInfoANDROID ahb_info = {.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID,
                                                          .buffer = ahb};
     VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &ded};
-    // Chain: allocate info -> dedicated -> ahb import
     ded.pNext = &ahb_info;
     ai.pNext = &ded;
+
     VkMemoryRequirements mr;
     vkGetBufferMemoryRequirements(g_vk.dev, buf, &mr);
     ai.allocationSize = mr.size;
-    // Find a memory type that supports the AHardwareBuffer import
-    VkPhysicalDeviceMemoryProperties mp;
-    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
+
+    // Use memory type from AHardwareBuffer properties (guaranteed to work with this AHB)
+    uint32_t compatible_types = mr.memoryTypeBits & ahb_props.memoryTypeBits;
     int type = -1;
-    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
-        if (!(mr.memoryTypeBits & (1u << i))) continue;
+    for (uint32_t i = 0; i < 32; i++) {
+        if (!(compatible_types & (1u << i))) continue;
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
         VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
         if ((f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
@@ -4455,11 +4485,13 @@ static bool vk_heap_place_ahb(uint64_t size) {
         }
     }
     if (type < 0) {
-        LOG("[vk] Mali AHB: no host-visible memory type for AHardwareBuffer\n");
+        LOG("[vk] Mali AHB: no host-visible memory type compatible with AHardwareBuffer (compat 0x%x)\n", compatible_types);
         vkDestroyBuffer(g_vk.dev, buf, NULL);
         AHardwareBuffer_release(ahb);
         return false;
     }
+    LOG("[vk] Mali AHB: using memory type %d\n", type);
+
     ai.memoryTypeIndex = (uint32_t)type;
     VkDeviceMemory mem;
     if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) {
@@ -4475,6 +4507,7 @@ static bool vk_heap_place_ahb(uint64_t size) {
         AHardwareBuffer_release(ahb);
         return false;
     }
+
     // Map the AHardwareBuffer at HEAP_BASE
     void *p = NULL;
     VkMemoryMapInfoKHR mi = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
@@ -4486,6 +4519,8 @@ static bool vk_heap_place_ahb(uint64_t size) {
         AHardwareBuffer_release(ahb);
         return false;
     }
+    LOG("[vk] Mali AHB: memory mapped at %p\n", p);
+
     // Remap at HEAP_BASE if not already there
     if (p != (void *)(uintptr_t)HEAP_BASE) {
         // Try to unmap and remap with placed mapping
@@ -4495,9 +4530,13 @@ static bool vk_heap_place_ahb(uint64_t size) {
                                   .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
         r = vkMapMemory2KHR(g_vk.dev, &mi2, &p);
         if (r != VK_SUCCESS || p != (void *)(uintptr_t)HEAP_BASE) {
-            LOG("[vk] Mali AHB: placed map at HEAP_BASE failed (%d), using offset mapping\n", r);
-            // Use the buffer with offset instead
+            LOG("[vk] Mali AHB: placed map at HEAP_BASE failed (%d), using offset mapping (offset %p)\n", r, (void *)((uintptr_t)p - HEAP_BASE));
+            // Use the buffer with offset instead - gmem_info will handle offset
+        } else {
+            LOG("[vk] Mali AHB: successfully placed at HEAP_BASE\n");
         }
+    } else {
+        LOG("[vk] Mali AHB: successfully mapped at HEAP_BASE\n");
     }
     gmem_buf = buf;
     gmem_mem = mem;
