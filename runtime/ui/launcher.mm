@@ -1615,6 +1615,13 @@ static void prelaunch_tab(float sc) {
                                   "some Adreno GPUs. Automatic: on for Adreno 8xx GPUs, off for the others. Applies when "
                                   "BOTWRecompAndroid restarts."));
         ImGui::Spacing();
+        ImGui::Text("%s", tr("Shader stages compiled in parallel"));
+        changed |= ImGui::Checkbox(tr("Shader stages in parallel (experimental)"), &g_settings.shader_parallel);
+        ImGui::TextDisabled("%s", tr("The fragment shader's SPIR-V is compiled on its own thread while the vertex stage's "
+                                  "compiles here; the first use of a new shader pair waits on both otherwise - a hitch that "
+                                  "pushed a frame past the pace's budget was the one that broke the constant 40 fps. Mali "
+                                  "(ARM): on by default. Applies from the next shader compile."));
+        ImGui::Spacing();
         ImGui::Text("%s", tr("Driver variables"));  // (#227: g_settings.driver_env, vulkan/device.c)
         ImGui::SetNextItemWidth(-FLT_MIN);
         changed |= ImGui::InputTextWithHint("##driverenv", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1", g_settings.driver_env,

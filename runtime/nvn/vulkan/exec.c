@@ -2592,15 +2592,15 @@ static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
     uint32_t *sv = NULL, *sf = NULL;
-    bool par = false;
-#ifdef LARECOMP_SHADER_PARALLEL
-    // (experimental LARECOMP_SHADER_PARALLEL=1: the fragment shader's SPIR-V compiles on its own thread while the
-    // vertex stage's compiles here - the two stages rarely overlap otherwise, and the first use of a new shader pair
-    // waits on both: a hitch that pushed a frame past the pace's budget was the one that broke the constant 40 fps)
-    static int par_i = -1;
-    if (par_i < 0) par_i = getenv("LARECOMP_SHADER_PARALLEL") != NULL;
-    par = par_i;
-#endif
+    bool par = g_settings.shader_parallel;
+    {   // (experimental LARECOMP_SHADER_PARALLEL=<n>: the fragment shader's SPIR-V compiles on its own thread while the
+        // vertex stage's compiles here - the two stages rarely overlap otherwise, and the first use of a new shader pair
+        // waits on both: a hitch that pushed a frame past the pace's budget was the one that broke the constant 40 fps;
+        // Mali (ARM, this device's Mali-G720: vendor 0x13B5): the same overlap for its compiler - on by default there)
+        const char *e = getenv("LARECOMP_SHADER_PARALLEL");
+        if (e) par = atoi(e) != 0;
+        else if (g_vk.props.vendorID == 0x13B5) par = true;
+    }
     if (par) {
         FsArgs *j = (FsArgs *)malloc(sizeof *j);
         j->p = p; j->out = &sf; j->n = &nf;

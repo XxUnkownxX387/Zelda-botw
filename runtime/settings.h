@@ -34,6 +34,8 @@ typedef struct {
     bool reverb;         // room reverb effect
     bool movie_audio;
     bool show_fps;
+    bool shader_parallel;  // (experimental: the fragment stage's SPIR-V compiles on its own thread while the vertex stage's
+                            // compiles here - LARECOMP_SHADER_PARALLEL=<n>, env; Mali: on by default - vulkan/exec.c)
     bool motion;          // the phone's (or a controller's) gyroscope as the controller's motion sensor (hle/motion.c)
     int motion_source;    // whose: 0 automatic (a controller's once its gyroscope is alive), 1 the phone's, 2 a controller's
     bool motion_flat;     // the phone's sensors as the Switch's screen in handheld mode, not a flat controller (hle/motion.c)
