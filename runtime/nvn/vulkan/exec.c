@@ -18,6 +18,7 @@
 #include "../../hle.h"
 #include "../../kernel.h"
 #include "shaders.h"
+#include "framegen.h"
 #include "vk.h"
 #include "buffer_copy.h"
 #include "timing_trace.h"
@@ -6580,6 +6581,8 @@ static void draw_(CmdRec *r, bool indexed) {
         if (last_hash) widescreen_backdrop_seen(last_hash);
         extern void widescreen_scene_ubo(const float *u, uint64_t size);  // (the camera's view-projection)
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
+        extern void framegen_camera(const float *u, uint64_t size);  // (the framegen's camera: the scene G-buffer's UBO)
+        if (st.ubuf[0][5].addr) framegen_camera((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
     }
     if (g_debug_frame) debug_draw(pr, r, indexed);
     {   // LARECOMP_LOG_RT=<w>x<h>[:<fmt hex>][+<w>x<h>[:<fmt>]...][,<max>[,<from frame>]]: draws into one color target of
