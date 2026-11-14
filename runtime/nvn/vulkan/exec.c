@@ -13,6 +13,7 @@
 #include <unistd.h>
 #ifdef __ANDROID__
 #include <sys/mman.h>
+#include <android/hardware_buffer.h>
 #endif
 
 #include "../../hle.h"
