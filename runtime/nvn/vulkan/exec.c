@@ -1812,7 +1812,7 @@ static void wb_apply(uint64_t done) {
 const TexBackend *g_dump_sampled;  // (LARECOMP_DUMP_SAMPLED: the texture to dump after the pass)
 NvnTexture *g_pass_t0;  // (the open pass's first color target and its layer: LARECOMP_DUMP_AFTER_LAYER)
 int g_pass_layer;
-static void dump_layers_raw(TexBackend *b) {  // every layer, level 0, as stored (R8 / R16 / RGBA8 / RGBA16F...)
+static void dump_layers_raw(const TexBackend *b) {  // every layer, level 0, as stored (R8 / R16 / RGBA8 / RGBA16F...)
     uint32_t bpp = b->format == VK_FORMAT_R16_UNORM || b->format == VK_FORMAT_R16_SFLOAT ? 2 : b->format == VK_FORMAT_R8_UNORM ? 1
                  : b->format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
     uint32_t nl = b->layers ? b->layers : 1;
@@ -1894,7 +1894,7 @@ static void vk_end_pass_at(int line) {
     vk_end_rendering(vk_cmd());
     in_pass = false;
     {   extern const TexBackend *g_dump_sampled;
-        if (g_dump_sampled) { TexBackend *db = g_dump_sampled; g_dump_sampled = NULL; dump_layers_raw(db); }
+        if (g_dump_sampled) { const TexBackend *db = g_dump_sampled; g_dump_sampled = NULL; dump_layers_raw(db); }
     }
     {   // LARECOMP_DUMP_AFTER_LAYER=<n>: the watched texture's layers (level 0) right after the first pass into layer n
         extern NvnTexture *g_pass_t0; extern int g_pass_layer;
@@ -7519,7 +7519,7 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
             static int dw = -1, dh, df;
             static unsigned long long da;
             if (dw < 0) { dw = 0; const char *e = getenv("LARECOMP_DUMP_SAMPLED"); if (e) sscanf(e, "%dx%d:%x@%llx", &dw, &dh, &df, &da); }
-            extern TexBackend *g_dump_sampled;
+            extern const TexBackend *g_dump_sampled;
             static uint64_t dumped_frame = ~0ull;
             if (dw && b && (int)t->width == dw && (int)t->height == dh && (int)t->format == df && (!da || t->addr == da) &&
                 dumped_frame != renderer_present_count()) {
