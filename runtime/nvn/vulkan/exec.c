@@ -3684,7 +3684,11 @@ static void resolve_feedback(Prog *pr, uint32_t draw_written) {
                 if (g_inplace_copy < 0) {
                     extern bool vk_driver_is_turnip(void);
                     extern bool vk_turnip_path_on(int setting);
-                    bool inplace = getenv("LARECOMP_FEEDBACK_INPLACE") || (vk_driver_is_turnip() && vk_turnip_path_on(g_settings.inplace_reads));
+                    // VK_EXT_attachment_feedback_loop_layout enables in-place feedback reads (sampling a target the pass writes)
+                    // Turnip (Adreno 8xx) and Mali (r54p1+) support this - avoids fbcopy snapshots (~5000-9600 copies/frame in log).
+                    bool inplace = getenv("LARECOMP_FEEDBACK_INPLACE") ||
+                                   (vk_driver_is_turnip() && vk_turnip_path_on(g_settings.inplace_reads)) ||
+                                   (g_vk.feedback_loop_layout && g_vk.props.vendorID == 0x13B5);  // Mali
                     g_inplace_copy = getenv("LARECOMP_FEEDBACK_COPY") != NULL || !inplace;
                     LOG("[vk] targets a draw writes, sampled by it: %s (%s)\n", g_inplace_copy ? "copies" : "in place",
                         g_settings.inplace_reads < 0 ? "automatic" : "settings");

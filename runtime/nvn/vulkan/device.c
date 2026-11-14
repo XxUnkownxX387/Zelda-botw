@@ -588,13 +588,18 @@ static void create_device(void) {
     // (a dma-buf, the other file type: where the opaque one takes no memory the CPU can use - Xclipse 530, #234)
     g_vk.mem_dmabuf = g_vk.mem_fd && has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
     if (g_vk.mem_dmabuf) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME;
+    // VK_EXT_attachment_feedback_loop_layout: allows sampling a render target while it's being written (feedback loop)
+    // Turnip (Adreno 8xx) and Mali (r54p1+) support this - enables in-place feedback reads, avoiding fbcopy snapshots.
+    g_vk.feedback_loop_layout = has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
+    if (g_vk.feedback_loop_layout) ext[n_ext++] = VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME;
     // (which ways this driver could export memory at all: a report from a Mali or an Xclipse says what to try next -
     // the option did nothing on a Mali-G720 r49p1 with no word in the log, #249)
-    LOG("[vk-cap] memory export: fd %s, dma-buf %s, Android hardware buffer %s, placed maps %s, host import %s\n",
+    LOG("[vk-cap] memory export: fd %s, dma-buf %s, Android hardware buffer %s, placed maps %s, host import %s, feedback loop layout %s\n",
         g_vk.mem_fd ? "yes" : "no", has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME) ? "yes" : "no",
         has_ext(ep, ne, VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) ? "yes" : "no",
         has_ext(ep, ne, VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME) ? "yes" : "no",
-        has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME) ? "yes" : "no");
+        has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME) ? "yes" : "no",
+        g_vk.feedback_loop_layout ? "yes" : "no");
     // the guest heap as GPU memory mapped at its own address (exec.c vk_heap_place; Turnip has it)
     g_vk.map_placed =has_ext(ep, ne, VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME) && has_ext(ep, ne, VK_KHR_MAP_MEMORY_2_EXTENSION_NAME);
     if (g_vk.map_placed) {
