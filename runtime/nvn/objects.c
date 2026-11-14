@@ -1462,7 +1462,12 @@ NVN(nvnQueuePresentTexture) {
         if (on < 0) on = !getenv("LARECOMP_PRESENT_WAIT") || atoi(getenv("LARECOMP_PRESENT_WAIT"));
         extern volatile uint64_t g_vsync_count;
         extern __thread uint64_t g_blocked_ns;  // (kernel.c: the pacer counts this as idle, not frame work)
-        int cap = g_settings.fps_mode == 2 || g_settings.fps_mode == 4 ? 1 : g_settings.fps_mode == 3 ? 3 : 2;  // (20: 3; 45: 60's)
+        // (framegen: the displayed rate is doubled, the presents run at the doubled rate (framepace_period_ns), the real
+        // frames keeping the clock's - the interval the presents may be spaced at is the displayed one)
+        int cap = g_settings.framegen ? 1  // (the frame generation doubled the displayed rate: the presents run at it)
+                           : (g_settings.fps_mode == 2 || g_settings.fps_mode == 4) ? 1
+                           : (g_settings.fps_mode == 3) ? 3
+                           : 2;  // (20: 3; 45: 60's)
         int n = w->interval > cap ? w->interval : cap;
         if (on && framepace_on()) {
             // BOTW 1.8.2 (runtime/hle/framepace.c): a steady grid at the chosen frame rate, whatever the interval;

@@ -576,6 +576,11 @@ static void tab_display(void) {
                        "In-game cutscenes and talks run at the chosen frame rate instead of 30. Some of them count frames "
                        "and may run shorter or out of step with their sound (at 60 fps the new game's opening gave Link "
                        "control 2 s early). Videos and menus stay at 30. Applies at once.");
+        opt_toggle("Frame generation (experimental)", &g_settings.framegen, false,
+                   "The frames the player sees are generated between two real ones - the scene warped from the camera's "
+                   "half step, the depth of the frame before - so the frame rate is doubled (30 -> 60) while the real "
+                   "frames keep the rate they have. Off: the frames are the real ones, at the chosen frame rate. On: the "
+                   "frames between two real ones are generated, the player sees double. Applies at once.");
     }
 #endif
 

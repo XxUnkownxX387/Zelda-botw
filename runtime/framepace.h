@@ -11,6 +11,14 @@ int framepace_target(void);
 int framepace_forced(void);
 // The time between presents for it, nanoseconds (no limit: 1/300 s).
 uint64_t framepace_period_ns(void);
+// The real frame's period in seconds (the frames between two real ones are generated - frame generation doubles the
+// rate the frames are shown at, framepace_period_ns - the generated ones fill the frames between): 2x framepace_period_ns
+// when the frame generation doubled the rate, else the same (the frames the game renders, and the generated ones the
+// player sees).
+double framepace_real_period(void);
+// The frame generation doubled the rate the frames are shown at (Video > Frame generation, vulkan/framegen.c: on, in
+// the world, and the chosen frame rate below 60 - the frames between two real ones are generated).
+bool framepace_gen_doubled(void);
 // true: the runtime paces the presents and sets the game's clock (1.8.2; LARECOMP_FRAMEPACE=0: the game's own pacing)
 bool framepace_on(void);
 // 1.8.2: the game is paused (pause menu, map) or the title screen's menu is up

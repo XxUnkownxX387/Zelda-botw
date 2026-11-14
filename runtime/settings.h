@@ -45,6 +45,9 @@ typedef struct {
     float overlay_pos[2]; // its top left, a share of the screen, dragged there with a finger (negative: the corner)
     bool event_fps_unlock;  // in-game cutscenes and talks at the chosen frame rate, not 30 (hle/framepace.c)
     int fps_mode;         // 0: the game's own choice (30 / 60, the frame pacer), 1: 30 fps, 2: 60 fps, 3: 20 fps, 4: 45 fps
+    bool framegen;        // Android: the frame generation (Video > Frame generation, vulkan/framegen.c): the frames the
+                          // player sees are generated between two real ones - the real frames keep the rate they have, the
+                          // generated ones are the ones doubled (off: the frames are the real ones, the chosen rate)
     bool shader_int32;    // shader address math in 32-bit words even where the driver offers 64-bit (vulkan/exec.c)
     bool native_code;     // Android: the game's own code on the CPU, no build of it (runtime/native.c); off by default
     bool files_in_place;  // Android: a setup reads the picked romfs/ where it is, no copy (services/fs.c); off by default

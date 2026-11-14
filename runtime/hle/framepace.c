@@ -99,6 +99,10 @@ static bool in_event(void) {
 
 bool framepace_in_event(void) { return g_game_version >= 182 && in_event(); }  // (hle/benchmark.c)
 
+// The frame generation doubled the rate the frames are shown at (Video > Frame generation, vulkan/framegen.c: on, in
+// the world, and the chosen frame rate below 60 - the frames between two real ones are generated).
+static bool g_gen_doubled;
+
 int framepace_target(void) {
     static int forced = -2, movie = -2, menu = -2, event = -2;
     if (forced == -2) forced = env_int("LARECOMP_FPS", -1);
@@ -114,8 +118,27 @@ int framepace_target(void) {
     if (menu > 0 && (fps == 0 || fps > menu) && in_menu()) fps = menu;
     int ev = event >= 0 ? event : g_settings.event_fps_unlock ? 0 : 30;
     if (ev > 0 && (fps == 0 || fps > ev) && in_event()) fps = ev;
+    // The frame generation (Video > Frame generation, vulkan/framegen.c, g_settings.framegen): when it is on and the
+    // rate is one of the generated ones (30, 20 - below 60), the frames the player sees are generated between two real
+    // ones - so the rate they are shown at is doubled - but only in the world: not in a menu, a movie, an event or a pause
+    // (there the frames are the real ones, at the rate the game holds itself there).
+    g_gen_doubled = g_settings.framegen && framepace_on() && !g_movie_playing && !in_menu() && !in_event() &&
+                     !framepace_on_title() && fps > 0 && fps * 2 <= 60;
+    if (g_gen_doubled) fps *= 2;
     return fps;
 }
+
+// The real frame's period in seconds (the frames between two real ones are generated: the frame generation doubled the
+// rate the frames are shown at, framepace_period_ns - the generated ones fill the frames between - without touching the
+// clock the generated frames are built from: the game still renders one frame per this).
+double framepace_real_period(void) {
+    uint64_t p = framepace_period_ns();
+    return (double)p / 1e9 * (g_gen_doubled ? 2.0 : 1.0);
+}
+
+// The frame generation doubled the rate the frames are shown at (Video > Frame generation, vulkan/framegen.c: on, in
+// the world, and the chosen frame rate below 60 - the frames between two real ones are generated).
+bool framepace_gen_doubled(void) { return g_gen_doubled; }
 
 // An experimental hard frame rate from the environment (LARECOMP_FPS=<n>): n > 0 fixes the pace at n fps - the auto's
 // slow motion can't take it back. (The setting is still what caps the menus / events / movies; this is the hard pace
@@ -203,7 +226,7 @@ void rt_vfr_update(uint64_t vfr) {
         last_target = -1;
     } else {
         if (s > 0.25) s = 0.25;  // (a load: not owed)
-        double period = framepace_period_ns() / 1e9;
+        double period = framepace_real_period();
         int target = framepace_target();
         if (target != last_target) smooth = period, last_step = 0;  // (a new pace: start from it)
         last_target = target;
