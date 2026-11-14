@@ -4619,6 +4619,14 @@ bool vk_heap_place(uint64_t size) {
     int type;
     const VkMemoryPropertyFlags need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     int dma_buf_failed = 0;  // track if dma-buf path failed for Mali fallback
+    // Query external buffer properties ONCE per handle type to find compatible memory types.
+    // This avoids creating buffers that the driver can't back with the requested external handle type.
+    VkPhysicalDeviceExternalBufferInfo ext_info = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO,
+                                                   .handleType = ht, .usage = bi.usage};
+    VkExternalBufferProperties ext_props = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+    vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
+    // The driver tells us which memory types support this external handle type.
+    // Intersect with the buffer's memory type bits after creation.
     for (;;) {
         ebi.handleTypes = ht;
         VkResult cr = vkCreateBuffer(g_vk.dev, &bi, NULL, &buf);
@@ -4636,24 +4644,34 @@ bool vk_heap_place(uint64_t size) {
                 (unsigned long long)(m4.maxBufferSize >> 20), (unsigned long long)(m3.maxMemoryAllocationSize >> 20));
             if (memfd && g_vk.mem_dmabuf && ht != VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
                 ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+                // Re-query external buffer properties for the new handle type
+                ext_info.handleType = ht;
+                vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
                 continue;
             }
             return NOT_PLACED();
         }
         vkGetBufferMemoryRequirements(g_vk.dev, buf, &mr);
         type = -1;  // host-visible and coherent (the CPU writes, the GPU reads and writes); cached when there is one
+        // Only consider memory types that are BOTH in the buffer's requirements AND support the external handle type.
+        uint32_t compatible_types = mr.memoryTypeBits & ext_props.externalMemoryProperties.compatibleMemoryTypes;
         for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+            if (!(compatible_types & (1u << i))) continue;
             VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
-            if (!(mr.memoryTypeBits & (1u << i)) || (f & need) != need) continue;
+            if ((f & need) != need) continue;
             if (type < 0 || (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) type = (int)i;
             if (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) break;
         }
         // For Mali on dma-buf: if no host-visible type found, the mmap at HEAP_BASE will fail.
         // Don't proceed with invalid type - try opaque fd instead, or AHardwareBuffer.
         if (type < 0 && memfd && g_vk.mem_dmabuf && ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
-            LOG("[vk] Mali: dma-buf offers no host-visible memory type (types 0x%x) - trying opaque fd\n", mr.memoryTypeBits);
+            LOG("[vk] Mali: dma-buf offers no host-visible memory type (types 0x%x, compat 0x%x) - trying opaque fd\n",
+                mr.memoryTypeBits, ext_props.externalMemoryProperties.compatibleMemoryTypes);
             vkDestroyBuffer(g_vk.dev, buf, NULL);
             ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+            // Re-query for opaque fd
+            ext_info.handleType = ht;
+            vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
             dma_buf_failed = 1;
             continue;
         }
@@ -4662,6 +4680,8 @@ bool vk_heap_place(uint64_t size) {
             "trying a dma-buf\n", mr.memoryTypeBits);
         vkDestroyBuffer(g_vk.dev, buf, NULL);
         ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        ext_info.handleType = ht;
+        vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
     }
     {   // LARECOMP_VK_MEMFD_TYPE=<n> (a test): the exported file's memory type - which one a driver gives a map the CPU
         // runs fast in and the GPU sees, memfd_probe.c tells
