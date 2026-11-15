@@ -37,6 +37,9 @@ static bool fg_has_prev_frame;
 // Camera for generated frame (half-step ahead)
 static float fg_gen_vp[4][4];
 
+// Framegen state
+static bool fg_pipeline_valid = false;
+
 FramegenCam g_framegen_cam;
 
 void framegen_init(void) {
@@ -53,6 +56,7 @@ void framegen_init(void) {
     fg_prev_depth_view = VK_NULL_HANDLE;
     fg_color_format = VK_FORMAT_UNDEFINED;
     fg_depth_format = VK_FORMAT_UNDEFINED;
+    fg_pipeline_valid = false;
 }
 
 void framegen_camera(const float *u, uint64_t size) {
@@ -141,7 +145,13 @@ void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageV
 
 // Create framegen pipeline and resources
 static void framegen_ensure_pipeline(void) {
-    if (fg_pipeline) return;
+    if (fg_pipeline_valid) return;
+
+    // Check if dynamic rendering is available (required for framegen)
+    if (!g_vk.dyn_render) {
+        LOG("[framegen] dynamic rendering not available, disabling framegen\n");
+        return;
+    }
 
     // Descriptor set layout: binding 0 = prev color, binding 1 = prev depth, binding 2 = uniform (VP matrices)
     VkDescriptorSetLayoutBinding bindings[3] = {
@@ -154,12 +164,22 @@ static void framegen_ensure_pipeline(void) {
     };
     VkDescriptorSetLayoutCreateInfo dsl_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                 .bindingCount = 3, .pBindings = bindings};
-    VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &dsl_info, NULL, &fg_desc_set_layout));
+    VkResult res = vkCreateDescriptorSetLayout(g_vk.dev, &dsl_info, NULL, &fg_desc_set_layout);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] failed to create descriptor set layout: %d\n", res);
+        return;
+    }
 
     // Pipeline layout
     VkPipelineLayoutCreateInfo pl_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                           .setLayoutCount = 1, .pSetLayouts = &fg_desc_set_layout};
-    VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &pl_info, NULL, &fg_pipeline_layout));
+    res = vkCreatePipelineLayout(g_vk.dev, &pl_info, NULL, &fg_pipeline_layout);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] failed to create pipeline layout: %d\n", res);
+        vkDestroyDescriptorSetLayout(g_vk.dev, fg_desc_set_layout, NULL);
+        fg_desc_set_layout = VK_NULL_HANDLE;
+        return;
+    }
 
     // Descriptor pool
     VkDescriptorPoolSize pool_sizes[2] = {
@@ -168,13 +188,31 @@ static void framegen_ensure_pipeline(void) {
     };
     VkDescriptorPoolCreateInfo dp_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                           .maxSets = 1, .poolSizeCount = 2, .pPoolSizes = pool_sizes};
-    VK_CHECK(vkCreateDescriptorPool(g_vk.dev, &dp_info, NULL, &fg_desc_pool));
+    res = vkCreateDescriptorPool(g_vk.dev, &dp_info, NULL, &fg_desc_pool);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] failed to create descriptor pool: %d\n", res);
+        vkDestroyPipelineLayout(g_vk.dev, fg_pipeline_layout, NULL);
+        vkDestroyDescriptorSetLayout(g_vk.dev, fg_desc_set_layout, NULL);
+        fg_pipeline_layout = VK_NULL_HANDLE;
+        fg_desc_set_layout = VK_NULL_HANDLE;
+        return;
+    }
 
     // Allocate descriptor set
     VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                               .descriptorPool = fg_desc_pool, .descriptorSetCount = 1,
                                               .pSetLayouts = &fg_desc_set_layout};
-    VK_CHECK(vkAllocateDescriptorSets(g_vk.dev, &alloc_info, &fg_desc_set));
+    res = vkAllocateDescriptorSets(g_vk.dev, &alloc_info, &fg_desc_set);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] failed to allocate descriptor set: %d\n", res);
+        vkDestroyDescriptorPool(g_vk.dev, fg_desc_pool, NULL);
+        vkDestroyPipelineLayout(g_vk.dev, fg_pipeline_layout, NULL);
+        vkDestroyDescriptorSetLayout(g_vk.dev, fg_desc_set_layout, NULL);
+        fg_desc_pool = VK_NULL_HANDLE;
+        fg_pipeline_layout = VK_NULL_HANDLE;
+        fg_desc_set_layout = VK_NULL_HANDLE;
+        return;
+    }
 
     // Shader modules
     size_t nv, nf;
@@ -221,6 +259,18 @@ static void framegen_ensure_pipeline(void) {
     free(sv);
     free(sf);
 
+    if (!vs || !fs) {
+        LOG("[framegen] failed to create shader modules\n");
+        vkFreeDescriptorSets(g_vk.dev, fg_desc_pool, 1, &fg_desc_set);
+        vkDestroyDescriptorPool(g_vk.dev, fg_desc_pool, NULL);
+        vkDestroyPipelineLayout(g_vk.dev, fg_pipeline_layout, NULL);
+        vkDestroyDescriptorSetLayout(g_vk.dev, fg_desc_set_layout, NULL);
+        fg_desc_pool = VK_NULL_HANDLE;
+        fg_pipeline_layout = VK_NULL_HANDLE;
+        fg_desc_set_layout = VK_NULL_HANDLE;
+        return;
+    }
+
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
          .module = vs, .pName = "main"},
@@ -254,10 +304,28 @@ static void framegen_ensure_pipeline(void) {
                                        .pMultisampleState = &ms, .pColorBlendState = &cb_info,
                                        .pDynamicState = &ds, .layout = fg_pipeline_layout,
                                        .renderPass = VK_NULL_HANDLE, .subpass = 0};
-    VK_CHECK(vkCreateGraphicsPipelines(g_vk.dev, VK_NULL_HANDLE, 1, &gp, NULL, &fg_pipeline));
+    res = vkCreateGraphicsPipelines(g_vk.dev, VK_NULL_HANDLE, 1, &gp, NULL, &fg_pipeline);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] failed to create graphics pipeline: %d\n", res);
+        vkDestroyShaderModule(g_vk.dev, vs, NULL);
+        vkDestroyShaderModule(g_vk.dev, fs, NULL);
+        vkFreeDescriptorSets(g_vk.dev, fg_desc_pool, 1, &fg_desc_set);
+        vkDestroyDescriptorPool(g_vk.dev, fg_desc_pool, NULL);
+        vkDestroyPipelineLayout(g_vk.dev, fg_pipeline_layout, NULL);
+        vkDestroyDescriptorSetLayout(g_vk.dev, fg_desc_set_layout, NULL);
+        fg_desc_pool = VK_NULL_HANDLE;
+        fg_pipeline_layout = VK_NULL_HANDLE;
+        fg_desc_set_layout = VK_NULL_HANDLE;
+        return;
+    }
 
     vkDestroyShaderModule(g_vk.dev, vs, NULL);
     vkDestroyShaderModule(g_vk.dev, fs, NULL);
+
+    // Success! Mark pipeline as valid
+    fg_pipeline_valid = true;
+    LOG("[framegen] pipeline created successfully\n");
+}
 }
 
 // Update descriptor set with current frame's resources
@@ -345,30 +413,60 @@ bool framegen_should_generate(void) {
 void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkFormat target_fmt, VkExtent2D extent) {
     if (!framegen_should_generate()) return;
 
-    LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
-
-    if (!fg_prev_color_view || !fg_prev_depth_view) {
-        // Fallback: clear black if no previous frame data
-        VkClearColorValue clear = {{0.0f, 0.0f, 0.0f, 1.0f}};
-        VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        extern NvnTexture* framegen_get_target_texture(void);
-        NvnTexture* target_tex = framegen_get_target_texture();
-        if (target_tex) {
-            TexBackend* target_backend = (TexBackend*)target_tex->backend;
-            if (target_backend) {
-                vkCmdClearColorImage(cb, target_backend->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
-            }
-        }
+    // Check if all required resources are available
+    if (!fg_pipeline_valid) {
+        LOG("[framegen] pipeline not ready, skipping generation\n");
+        return;
+    }
+    if (!fg_prev_color_view) {
+        LOG("[framegen] missing color view, skipping generation\n");
+        return;
+    }
+    if (!fg_prev_depth_view) {
+        LOG("[framegen] missing depth view, skipping generation\n");
+        return;
+    }
+    if (!fg_prev_color_image || !fg_prev_depth_image) {
+        LOG("[framegen] missing color/depth images, skipping generation\n");
+        return;
+    }
+    if (!fg_pipeline || !fg_pipeline_layout || !fg_desc_set || !fg_desc_set_layout || !fg_desc_pool || !fg_desc_set) {
+        LOG("[framegen] pipeline/descriptor resources not ready, skipping generation\n");
+        return;
+    }
+    if (!fg_prev_color_image || !fg_prev_depth_image) {
+        LOG("[framegen] previous frame images not available, skipping generation\n");
+        return;
+    }
+    if (!fg_pipeline_valid) {
+        LOG("[framegen] pipeline not valid, skipping generation\n");
+        return;
+    }
+    if (!g_vk.dyn_render) {
+        LOG("[framegen] dynamic rendering not available, skipping generation\n");
+        return;
+    }
+    if (!g_vk.extended_dynamic_state || !g_vk.dyn_render) {
+        LOG("[framegen] required Vulkan features not available, skipping generation\n");
         return;
     }
 
+    LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
+
     framegen_ensure_pipeline();
+    if (!fg_pipeline_valid) {
+        LOG("[framegen] pipeline creation failed, skipping generation\n");
+        return;
+    }
 
     // Update uniform buffer with VP matrices
     struct { float prev_vp[4][4]; float curr_vp[4][4]; float gen_vp[4][4]; float extent[2]; } *ub_data;
     VkSpan ub_span = vk_transient(sizeof(*ub_data), 256);
     ub_data = ub_span.ptr;
-    if (!ub_data) return;
+    if (!ub_data) {
+        LOG("[framegen] failed to allocate uniform buffer\n");
+        return;
+    }
 
     memcpy(ub_data->prev_vp, fg_prev_vp, sizeof fg_prev_vp);
     extern void framegen_get_current_vp(float out[4][4]);
@@ -397,7 +495,14 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
                                  .dependencyFlags = 0,
                                  .imageMemoryBarrierCount = 1,
                                  .pImageMemoryBarriers = &depth_barrier};
-    vkCmdPipelineBarrier2(cb, &dep_info);
+    VkResult res = vkCmdPipelineBarrier2(cb, &dep_info);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] depth layout transition failed: %d\n", res);
+        return;
+    }
+
+    // Update descriptor set with previous frame's color/depth + uniform buffer
+    framegen_update_descriptors(VK_NULL_HANDLE, ub_span.buf, ub_span.off, sizeof(*ub_data));
 
     // Render the warp
     VkRenderingAttachmentInfo color_att = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -412,7 +517,29 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
                           .pColorAttachments = &color_att,
                           .pDepthAttachment = NULL,
                           .pStencilAttachment = NULL};
-    vk_begin_rendering(cb, &ri, &target_fmt, VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT);
+    VkResult res = vk_begin_rendering(cb, &ri, &target_fmt, VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] vk_begin_rendering failed: %d\n", res);
+        // Transition depth back before returning
+        VkImageMemoryBarrier2 depth_barrier_back = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = fg_prev_depth_image,
+            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}};
+
+        VkDependencyInfo dep_info_back = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                          .dependencyFlags = 0,
+                                          .imageMemoryBarrierCount = 1,
+                                          .pImageMemoryBarriers = &depth_barrier_back};
+        vkCmdPipelineBarrier2(cb, &dep_info_back);
+        return;
+    }
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fg_pipeline);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fg_pipeline_layout, 0, 1, &fg_desc_set, 0, NULL);
@@ -424,7 +551,10 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
     
     vkCmdDraw(cb, 4, 1, 0, 0);
     
-    vk_end_rendering(cb);
+    VkResult res = vk_end_rendering(cb);
+    if (res != VK_SUCCESS) {
+        LOG("[framegen] vk_end_rendering failed: %d\n", res);
+    }
 
     // Transition depth image back to DEPTH_STENCIL_ATTACHMENT for next frame
     VkImageMemoryBarrier2 depth_barrier_back = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
