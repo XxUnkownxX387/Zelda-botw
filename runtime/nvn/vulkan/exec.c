@@ -4472,7 +4472,7 @@ static bool vk_heap_place_ahb(uint64_t size) {
     ai.allocationSize = mr.size;
 
     // Use memory type from AHardwareBuffer properties directly.
-    // First pass: prefer HOST_VISIBLE | HOST_COHERENT
+    // ONLY accept HOST_VISIBLE | HOST_COHERENT - non-coherent crashes on Mali AHB mapping.
     uint32_t ahb_memory_types = ahb_props.memoryTypeBits;
     int type = -1;
     VkPhysicalDeviceMemoryProperties mp;
@@ -4480,37 +4480,27 @@ static bool vk_heap_place_ahb(uint64_t size) {
     LOG("[vk] Mali AHB DEBUG: AHB memory types = 0x%x, buffer mr.memoryTypeBits = 0x%x\n",
         ahb_memory_types, mr.memoryTypeBits);
     const uint32_t need_coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    const uint32_t need_visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
     for (uint32_t i = 0; i < 32; i++) {
         if (!(ahb_memory_types & (1u << i))) continue;
         VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
         LOG("[vk] Mali AHB DEBUG: type %d: AHB has it, mp flags=0x%x, coherent_match=%d, visible_match=%d\n",
             i, f, ((f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) == (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ? 1 : 0,
             ((f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? 1 : 0);
-        if ((f & need_coherent) == need_coherent) {
+        if ((f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+            (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
             type = (int)i;
             break;
         }
     }
-    // Second pass: accept HOST_VISIBLE only (non-coherent, will flush/invalidate manually)
+    // NO fallback to non-coherent - it crashes on Mali AHB mapping!
     if (type < 0) {
-        for (uint32_t i = 0; i < 32; i++) {
-            if (!(ahb_memory_types & (1u << i))) continue;
-            VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
-            if ((f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
-                LOG("[vk] Mali AHB: accepting non-coherent type %d (flags=0x%x)\n", i, f);
-                type = (int)i;
-                break;
-            }
-        }
-    }
-    if (type < 0) {
-        LOG("[vk] Mali AHB: no host-visible memory type in AHB props (types 0x%x)\n", ahb_memory_types);
+        LOG("[vk] Mali AHB: no host-visible+coherent memory type in AHB props (types 0x%x)\n", ahb_memory_types);
+        LOG("[vk] Mali AHB: trying memfd/opaque fd path as fallback...\n");
         vkDestroyBuffer(g_vk.dev, buf, NULL);
         AHardwareBuffer_release(ahb);
-        return false;
+        return false;  // Let the caller try memfd/opaque fd path
     }
-    LOG("[vk] Mali AHB: using memory type %d\n", type);
+    LOG("[vk] Mali AHB: using memory type %d (coherent)\n", type);
 
     LOG("[vk] Mali AHB DEBUG: vkAllocateMemory...\n");
     ai.memoryTypeIndex = (uint32_t)type;
