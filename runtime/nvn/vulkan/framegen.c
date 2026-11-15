@@ -387,6 +387,42 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
     };
     vkUpdateDescriptorSets(g_vk.dev, 3, writes, 0, NULL);
 
+    // Transition depth image from DEPTH_STENCIL_ATTACHMENT to SHADER_READ_ONLY
+    VkImageMemoryBarrier2 depth_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = fg_prev_depth_image,
+        .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}};
+
+    VkDependencyInfo dep_info = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                 .dependencyFlags = 0,
+                                 .imageMemoryBarrierCount = 1,
+                                 .pImageMemoryBarriers = &depth_barrier};
+    vkCmdPipelineBarrier2(cb, &dep_info);
+
+    // Update descriptor set with previous frame's color/depth + uniform buffer
+    VkDescriptorImageInfo color_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_color_view,
+                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo depth_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_depth_view,
+                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo ub_info = {.buffer = ub_span.buf, .offset = ub_span.off, .range = sizeof(*ub_data)};
+
+    VkWriteDescriptorSet writes[3] = {
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 0,
+         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &color_info},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 1,
+         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &depth_info},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 2,
+         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &ub_info},
+    };
+    vkUpdateDescriptorSets(g_vk.dev, 3, writes, 0, NULL);
+
     // Render the warp
     VkRenderingAttachmentInfo color_att = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                                            .imageView = target_view,
@@ -413,4 +449,23 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
     vkCmdDraw(cb, 4, 1, 0, 0);
     
     vk_end_rendering(cb);
+
+    // Transition depth image back to DEPTH_STENCIL_ATTACHMENT for next frame
+    VkImageMemoryBarrier2 depth_barrier_back = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+        .dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = fg_prev_depth_image,
+        .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}};
+
+    VkDependencyInfo dep_info_back = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                      .dependencyFlags = 0,
+                                      .imageMemoryBarrierCount = 1,
+                                      .pImageMemoryBarriers = &depth_barrier_back};
+    vkCmdPipelineBarrier2(cb, &dep_info_back);
 }
