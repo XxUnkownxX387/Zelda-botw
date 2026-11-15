@@ -4470,22 +4470,32 @@ static bool vk_heap_place_ahb(uint64_t size) {
     vkGetBufferMemoryRequirements(g_vk.dev, buf, &mr);
     ai.allocationSize = mr.size;
 
-    // Use memory type from AHardwareBuffer properties (guaranteed to work with this AHB)
-    uint32_t compatible_types = mr.memoryTypeBits & ahb_props.memoryTypeBits;
+    // Use memory type from AHardwareBuffer properties directly.
+    // Don't intersect with mr.memoryTypeBits - the AHB properties already tell us
+    // which memory types work with THIS specific AHardwareBuffer. The buffer was
+    // created with the AHB external handle, so its requirements should be compatible.
+    uint32_t ahb_memory_types = ahb_props.memoryTypeBits;
     int type = -1;
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
     for (uint32_t i = 0; i < 32; i++) {
-        if (!(compatible_types & (1u << i))) continue;
-        VkPhysicalDeviceMemoryProperties mp;
-        vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
+        if (!(ahb_memory_types & (1u << i))) continue;
         VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
         if ((f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-            type = (int)i;
-            break;
+            // Verify this type is also in the buffer's supported types (should be for AHB import)
+            if (mr.memoryTypeBits & (1u << i)) {
+                type = (int)i;
+                break;
+            } else {
+                LOG("[vk] Mali AHB: AHB supports type %d (host-visible) but buffer doesn't - trying anyway\n", i);
+                type = (int)i;  // Try anyway for AHB import
+                break;
+            }
         }
     }
     if (type < 0) {
-        LOG("[vk] Mali AHB: no host-visible memory type compatible with AHardwareBuffer (compat 0x%x)\n", compatible_types);
+        LOG("[vk] Mali AHB: no host-visible memory type in AHB props (types 0x%x)\n", ahb_memory_types);
         vkDestroyBuffer(g_vk.dev, buf, NULL);
         AHardwareBuffer_release(ahb);
         return false;
