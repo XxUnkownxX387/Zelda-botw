@@ -330,6 +330,10 @@ static void framegen_ensure_pipeline(void) {
 
 // Update descriptor set with current frame's resources
 static void framegen_update_descriptors(VkDeviceMemory ub_mem, VkBuffer ub_buffer, VkDeviceSize ub_offset, VkDeviceSize ub_size) {
+    if (!fg_desc_set || !fg_desc_pool) {
+        LOG("[framegen] descriptor set/pool not ready, skipping descriptor update\n");
+        return;
+    }
     VkDescriptorImageInfo color_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_color_view,
                                         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo depth_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_depth_view,
@@ -346,56 +350,6 @@ static void framegen_update_descriptors(VkDeviceMemory ub_mem, VkBuffer ub_buffe
     };
     vkUpdateDescriptorSets(g_vk.dev, 3, writes, 0, NULL);
 }
-
-// Render the generated frame (warp)
-void framegen_render_generated(VkCommandBuffer cb, VkImageView target_view, VkFormat target_fmt, VkExtent2D extent) {
-    if (!framegen_enabled() || !framepace_gen_doubled() || !fg_has_prev_frame) return;
-    if (!fg_prev_color_view || !fg_prev_depth_view) return;
-
-    framegen_ensure_pipeline();
-
-    // Update uniform buffer with VP matrices
-    struct { float prev_vp[4][4]; float curr_vp[4][4]; float gen_vp[4][4]; float extent[2]; } *ub_data;
-    VkSpan ub_span = vk_transient(sizeof(*ub_data), 256);
-    ub_data = ub_span.ptr;
-    if (!ub_data) return;
-
-    memcpy(ub_data->prev_vp, fg_prev_vp, sizeof fg_prev_vp);
-    // Current VP is the last real frame's
-    extern void framegen_get_current_vp(float out[4][4]);
-    framegen_get_current_vp(ub_data->curr_vp);
-    memcpy(ub_data->gen_vp, fg_gen_vp, sizeof fg_gen_vp);
-    ub_data->extent[0] = (float)fg_extent.width;
-    ub_data->extent[1] = (float)fg_extent.height;
-
-    framegen_update_descriptors(VK_NULL_HANDLE, ub_span.buf, ub_span.off, sizeof(*ub_data));
-
-    // Render
-    VkRenderingAttachmentInfo color_att = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                                           .imageView = fg_prev_color_view, // render to previous color? No, render to target
-                                           .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                           .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                                           .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
-    // We need to render to the target view passed in
-    // For simplicity, we'll use the target_view directly
-    // Actually we need to create a framebuffer/rendering for the target
-
-    // This is a simplified implementation - in reality we'd need to set up proper rendering
-    // For now, return early as the full implementation requires more integration
-    (void)cb; (void)target_view; (void)target_fmt; (void)extent;
-}
-
-void framegen_get_current_vp(float out[4][4]) {
-    if (g_framegen_cam.valid) {
-        memcpy(out, g_framegen_cam.vp, sizeof g_framegen_cam.vp);
-    } else {
-        // Identity as fallback
-        for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) out[r][c] = (r == c) ? 1.0f : 0.0f;
-    }
-}
-
-// Framegen capture is now done at end of main scene pass (vk_end_pass in exec.c)
-// void framegen_after_real_frame(...) { ... }
 
 // Check if we should generate a frame instead of presenting real frame
 bool framegen_should_generate(void) {
