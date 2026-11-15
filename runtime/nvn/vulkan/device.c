@@ -1466,7 +1466,7 @@ uint64_t renderer_present_count(void) { return total_frames; }
 uint64_t vk_frame_counter(void) { return g_frame_counter; }
 static float g_shot_crop[4] = {0, 0, 1, 1};
 static double last_fps_time;
-static NvnTexture *g_last_presented;
+NvnTexture *g_last_presented;
 
 const float *vk_shot_crop(void) { return g_shot_crop; }
 
