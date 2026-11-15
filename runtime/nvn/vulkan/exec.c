@@ -4260,6 +4260,7 @@ static VkDeviceMemory gmem_mem;
 static uint64_t gmem_size;
 #ifdef __ANDROID__
 static bool gmem_placed;  // (gmem_buf is the guest heap itself, usable as a uniform buffer: vk_heap_place)
+static bool gmem_non_coherent;  // (heap memory is host-visible but not host-coherent: needs manual flush/invalidate)
 
 static bool ubo_direct(uint64_t addr, uint64_t size, VkDescriptorBufferInfo *out) {
     static int on = -1;
@@ -4471,27 +4472,36 @@ static bool vk_heap_place_ahb(uint64_t size) {
     ai.allocationSize = mr.size;
 
     // Use memory type from AHardwareBuffer properties directly.
-    // Don't intersect with mr.memoryTypeBits - the AHB properties already tell us
-    // which memory types work with THIS specific AHardwareBuffer. The buffer was
-    // created with the AHB external handle, so its requirements should be compatible.
+    // First pass: prefer HOST_VISIBLE | HOST_COHERENT
     uint32_t ahb_memory_types = ahb_props.memoryTypeBits;
     int type = -1;
     VkPhysicalDeviceMemoryProperties mp;
     vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
     LOG("[vk] Mali AHB DEBUG: AHB memory types = 0x%x, buffer mr.memoryTypeBits = 0x%x\n",
         ahb_memory_types, mr.memoryTypeBits);
+    const uint32_t need_coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    const uint32_t need_visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
     for (uint32_t i = 0; i < 32; i++) {
         if (!(ahb_memory_types & (1u << i))) continue;
         VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
-        LOG("[vk] Mali AHB DEBUG: type %d: AHB has it, mp flags=0x%x, VISIBLE=0x%x, COHERENT=0x%x, need=0x%x\n",
-            i, f, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        uint32_t need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        if ((f & need) == need) {
-            LOG("[vk] Mali AHB DEBUG: type %d MATCHES host-visible+coherent, buffer supports=%d\n",
-                i, (mr.memoryTypeBits & (1u << i)) ? 1 : 0);
+        LOG("[vk] Mali AHB DEBUG: type %d: AHB has it, mp flags=0x%x, coherent_match=%d, visible_match=%d\n",
+            i, f, ((f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) == (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ? 1 : 0,
+            ((f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? 1 : 0);
+        if ((f & need_coherent) == need_coherent) {
             type = (int)i;
             break;
+        }
+    }
+    // Second pass: accept HOST_VISIBLE only (non-coherent, will flush/invalidate manually)
+    if (type < 0) {
+        for (uint32_t i = 0; i < 32; i++) {
+            if (!(ahb_memory_types & (1u << i))) continue;
+            VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
+            if ((f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+                LOG("[vk] Mali AHB: accepting non-coherent type %d (flags=0x%x)\n", i, f);
+                type = (int)i;
+                break;
+            }
         }
     }
     if (type < 0) {
@@ -4701,21 +4711,42 @@ bool vk_heap_place(uint64_t size) {
             return NOT_PLACED();
         }
         vkGetBufferMemoryRequirements(g_vk.dev, buf, &mr);
-        type = -1;  // host-visible and coherent (the CPU writes, the GPU reads and writes); cached when there is one
+        type = -1;  // host-visible (coherent preferred but not required)
+        const VkMemoryPropertyFlags need_coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        const VkMemoryPropertyFlags need_visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
         // The buffer's memoryTypeBits is already filtered by the driver for the external handle type
         // we requested via VkExternalMemoryBufferCreateInfo. Just use it directly.
-        LOG("[vk] Mali memfd DEBUG: handle_type=%s, mr.memoryTypeBits=0x%x, need=0x%x\n",
+        LOG("[vk] Mali memfd DEBUG: handle_type=%s, mr.memoryTypeBits=0x%x, need_coherent=0x%x, need_visible=0x%x\n",
             ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT ? "DMA_BUF" : "OPAQUE_FD",
-            mr.memoryTypeBits, need);
+            mr.memoryTypeBits, need_coherent, need_visible);
+        // First pass: prefer HOST_VISIBLE | HOST_COHERENT
         for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
             if (!(mr.memoryTypeBits & (1u << i))) continue;
             VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
-            LOG("[vk] Mali memfd DEBUG: type %d: mr has it, flags=0x%x, need=0x%x, match=%d\n",
-                i, f, need, ((f & need) == need) ? 1 : 0);
-            if ((f & need) != need) continue;
-            if (type < 0 || (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) type = (int)i;
-            if (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) break;
+            LOG("[vk] Mali memfd DEBUG: type %d: mr has it, flags=0x%x, coherent_match=%d, visible_match=%d\n",
+                i, f, ((f & need_coherent) == need_coherent) ? 1 : 0, ((f & need_visible) == need_visible) ? 1 : 0);
+            if ((f & need_coherent) == need_coherent) {
+                if (type < 0 || (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) type = (int)i;
+                if (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) break;
+            }
         }
+        // Second pass: accept HOST_VISIBLE only (non-coherent, will flush/invalidate manually)
+        if (type < 0) {
+            for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+                if (!(mr.memoryTypeBits & (1u << i))) continue;
+                VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
+                if ((f & need_visible) == need_visible) {
+                    LOG("[vk] Mali memfd: accepting non-coherent type %d (flags=0x%x)\n", i, f);
+                    type = (int)i;
+                    break;
+                }
+            }
+        }
+        if (type < 0) {
+            LOG("[vk] Mali: no host-visible memory type available (types 0x%x)\n", mr.memoryTypeBits);
+            return NOT_PLACED();
+        }
+        LOG("[vk] Mali memfd: selected memory type %d\n", type);
         // For Mali on dma-buf: if no host-visible type found, the mmap at HEAP_BASE will fail.
         // Don't proceed with invalid type - try opaque fd instead, or AHardwareBuffer.
         if (type < 0 && memfd && g_vk.mem_dmabuf && ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
@@ -4777,6 +4808,8 @@ bool vk_heap_place(uint64_t size) {
         }
         return NOT_PLACED();
     }
+    // Track if memory is non-coherent (needs manual flush/invalidate)
+    gmem_non_coherent = (type >= 0) && ((mp.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0);
     gmem_buf = buf;
     gmem_mem = mem;
     gmem_size = size;
