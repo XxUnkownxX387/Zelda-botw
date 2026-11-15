@@ -4481,6 +4481,8 @@ static bool vk_heap_place_ahb(uint64_t size) {
     for (uint32_t i = 0; i < 32; i++) {
         if (!(ahb_memory_types & (1u << i))) continue;
         VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
+        LOG("[vk] Mali AHB: checking type %d: flags=0x%x, need=0x%x\n", i, f,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if ((f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
             // Verify this type is also in the buffer's supported types (should be for AHB import)
