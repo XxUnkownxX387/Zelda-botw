@@ -2007,6 +2007,12 @@ uint64_t vk_scene_frame(void) { return g_scene_frame; }
 // VkImageView framegen_get_depth_view(void) { ... }
 // NvnTexture* framegen_get_depth_texture(void) { ... }
 
+// Returns the current swapchain texture being presented (for framegen clear fallback)
+NvnTexture* framegen_get_target_texture(void) {
+    extern NvnTexture* g_last_presented;
+    return g_last_presented;
+}
+
 static VkRect2D scissor_rect(void);
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;

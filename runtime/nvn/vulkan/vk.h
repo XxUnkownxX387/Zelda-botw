@@ -153,6 +153,8 @@ VkImageView vk_dummy_view(int textype);
 // Framegen capture is now done at end of main scene pass (vk_end_pass in exec.c)
 // VkImageView framegen_get_depth_view(void);
 // NvnTexture* framegen_get_depth_texture(void);
+// Returns the current swapchain texture being presented (for framegen clear fallback)
+NvnTexture* framegen_get_target_texture(void);
 #ifdef __ANDROID__
 // A render target view of a CPU-decoded BC texture in a format of the block's size (GPU compression): a view of its
 // shadow image (*fmt, *w x *h: that format and level extent), else VK_NULL_HANDLE. vk_bc_shadows_resolve: the blocks

@@ -351,7 +351,16 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
         // Fallback: clear black if no previous frame data
         VkClearColorValue clear = {{0.0f, 0.0f, 0.0f, 1.0f}};
         VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdClearColorImage(cb, target_view, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+        extern NvnTexture* framegen_get_target_texture(void);
+        NvnTexture* target_tex = framegen_get_target_texture();
+        if (target_tex) {
+            TexBackend* target_backend = (TexBackend*)target_tex->backend;
+            if (target_backend) {
+                VkClearColorValue clear = {{0.0f, 0.0f, 0.0f, 1.0f}};
+                VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cb, target_backend->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            }
+        }
         return;
     }
 
@@ -371,21 +380,7 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
     ub_data->extent[1] = (float)fg_extent.height;
 
     // Update descriptor set with previous frame's color/depth + uniform buffer
-    VkDescriptorImageInfo color_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_color_view,
-                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorImageInfo depth_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_depth_view,
-                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorBufferInfo ub_info = {.buffer = ub_span.buf, .offset = ub_span.off, .range = sizeof(*ub_data)};
-
-    VkWriteDescriptorSet writes[3] = {
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 0,
-         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &color_info},
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 1,
-         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &depth_info},
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 2,
-         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &ub_info},
-    };
-    vkUpdateDescriptorSets(g_vk.dev, 3, writes, 0, NULL);
+    framegen_update_descriptors(VK_NULL_HANDLE, ub_span.buf, ub_span.off, sizeof(*ub_data));
 
     // Transition depth image from DEPTH_STENCIL_ATTACHMENT to SHADER_READ_ONLY
     VkImageMemoryBarrier2 depth_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -405,23 +400,6 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
                                  .imageMemoryBarrierCount = 1,
                                  .pImageMemoryBarriers = &depth_barrier};
     vkCmdPipelineBarrier2(cb, &dep_info);
-
-    // Update descriptor set with previous frame's color/depth + uniform buffer
-    VkDescriptorImageInfo color_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_color_view,
-                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorImageInfo depth_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_depth_view,
-                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorBufferInfo ub_info = {.buffer = ub_span.buf, .offset = ub_span.off, .range = sizeof(*ub_data)};
-
-    VkWriteDescriptorSet writes[3] = {
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 0,
-         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &color_info},
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 1,
-         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &depth_info},
-        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 2,
-         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &ub_info},
-    };
-    vkUpdateDescriptorSets(g_vk.dev, 3, writes, 0, NULL);
 
     // Render the warp
     VkRenderingAttachmentInfo color_att = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -468,4 +446,5 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
                                       .imageMemoryBarrierCount = 1,
                                       .pImageMemoryBarriers = &depth_barrier_back};
     vkCmdPipelineBarrier2(cb, &dep_info_back);
+}
 }
