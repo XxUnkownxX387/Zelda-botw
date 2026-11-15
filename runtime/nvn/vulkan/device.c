@@ -1606,7 +1606,9 @@ void backend_present(NvnTexture *t) {
         extern bool framegen_should_generate(void);
         extern void framegen_present_generated(VkCommandBuffer, VkImageView, VkFormat, VkExtent2D);
         if (framegen_should_generate()) {
-            framegen_present_generated(cb, b->view, b->format, g_vk.sc_extent);
+            static const VkComponentMapping id = {0};
+            VkImageView color_view = vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, b->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+            framegen_present_generated(cb, color_view, b->format, g_vk.sc_extent);
             // Still need to end the frame properly
             vk_frame_end(shot ? "build/window.png" : NULL);
         } else {
