@@ -4261,6 +4261,7 @@ static uint64_t gmem_size;
 #ifdef __ANDROID__
 static bool gmem_placed;  // (gmem_buf is the guest heap itself, usable as a uniform buffer: vk_heap_place)
 static bool gmem_non_coherent;  // (heap memory is host-visible but not host-coherent: needs manual flush/invalidate)
+static uint64_t gmem_offset;  // (offset from HEAP_BASE where the heap memory is actually mapped; 0 if placed at HEAP_BASE)
 
 static bool ubo_direct(uint64_t addr, uint64_t size, VkDescriptorBufferInfo *out) {
     static int on = -1;
@@ -4537,31 +4538,16 @@ static bool vk_heap_place_ahb(uint64_t size) {
     }
     LOG("[vk] Mali AHB: memory mapped at %p\n", p);
 
-    // Remap at HEAP_BASE if not already there
-    if (p != (void *)(uintptr_t)HEAP_BASE) {
-        LOG("[vk] Mali AHB DEBUG: attempting placed map at HEAP_BASE...\n");
-        // Try to unmap and remap with placed mapping
-        vkUnmapMemory2KHR(g_vk.dev, &(VkMemoryUnmapInfoKHR){.sType = VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, .memory = mem});
-        VkMemoryMapPlacedInfoEXT pl = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_PLACED_INFO_EXT, .pPlacedAddress = (void *)(uintptr_t)HEAP_BASE};
-        VkMemoryMapInfoKHR mi2 = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .pNext = &pl, .flags = VK_MEMORY_MAP_PLACED_BIT_EXT,
-                                  .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
-        LOG("[vk] Mali AHB DEBUG: vkMapMemory2KHR (placed)...\n");
-        r = vkMapMemory2KHR(g_vk.dev, &mi2, &p);
-        if (r != VK_SUCCESS || p != (void *)(uintptr_t)HEAP_BASE) {
-            LOG("[vk] Mali AHB: placed map at HEAP_BASE failed (%d), using offset mapping (offset %p)\n", r, (void *)((uintptr_t)p - HEAP_BASE));
-            // Use the buffer with offset instead - gmem_info will handle offset
-        } else {
-            LOG("[vk] Mali AHB: successfully placed at HEAP_BASE\n");
-        }
-    } else {
-        LOG("[vk] Mali AHB: successfully mapped at HEAP_BASE\n");
-    }
+    // Offset mapping: don't force HEAP_BASE, use offset from mapped address
+    gmem_offset = (uintptr_t)p >= HEAP_BASE ? (uintptr_t)p - HEAP_BASE : 0;
+    LOG("[vk] Mali AHB: memory mapped at %p (offset %llu from HEAP_BASE)\n", p, (unsigned long long)gmem_offset);
+
     gmem_buf = buf;
     gmem_mem = mem;
     gmem_size = size;
     gmem_placed = false;
     gcopy_mode = false;
-    LOG("[vk] Mali: guest heap %llu MB is GPU memory (AHardwareBuffer at %p)\n", (unsigned long long)(size >> 20), p);
+    LOG("[vk] Mali: guest heap %llu MB is GPU memory (AHardwareBuffer at %p, offset %llu from HEAP_BASE)\n", (unsigned long long)(size >> 20), p, (unsigned long long)gmem_offset);
     return true;
 #else
     (void)size;
@@ -4780,23 +4766,22 @@ bool vk_heap_place(uint64_t size) {
         VkMemoryGetFdInfoKHR gi = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, .memory = mem, .handleType = ht};
         r = vkGetMemoryFdKHR(g_vk.dev, &gi, &fd);
         if (r == VK_SUCCESS) {
-            p = mmap((void *)(uintptr_t)HEAP_BASE, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
+            // Offset mapping: don't force HEAP_BASE, let the driver choose the address
+            p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
             if (p == MAP_FAILED) p = NULL, r = VK_ERROR_MEMORY_MAP_FAILED;
             close(fd);
         }
     } else if (r == VK_SUCCESS) {
-        VkMemoryMapPlacedInfoEXT pl = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_PLACED_INFO_EXT, .pPlacedAddress = (void *)(uintptr_t)HEAP_BASE};
-        VkMemoryMapInfoKHR mi = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .pNext = &pl, .flags = VK_MEMORY_MAP_PLACED_BIT_EXT,
-                                 .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
+        // Offset mapping: don't force HEAP_BASE, let the driver choose the address
+        VkMemoryMapInfoKHR mi = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
         r = vkMapMemory2KHR(g_vk.dev, &mi, &p);
     }
-    if (r != VK_SUCCESS || p != (void *)(uintptr_t)HEAP_BASE) {
+    if (r != VK_SUCCESS || !p) {
         // (memory types the buffer takes: with an exported file on an Xclipse 530 none of them was host-visible and
         // coherent, -8, #234)
         LOG("[vk] heap placement failed (%d, mapped at %p, type %d, the buffer's memory types 0x%x%s): shader global memory "
             "through CPU copies\n", r, p, type, mr.memoryTypeBits, memfd ? ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT ? ", a dma-buf" : ", an exported file" : "");
         if (mem) vkFreeMemory(g_vk.dev, mem, NULL);  // (freeing a placed map unmaps it: the window gets its pages back)
-        if (p == (void *)(uintptr_t)HEAP_BASE) plat_reset_guest(HEAP_BASE, HEAP_BASE + size);
         vkDestroyBuffer(g_vk.dev, buf, NULL);
         // Mali fallback: try AHardwareBuffer (Android hardware buffer) when dma-buf/opaque fd mmap fails.
         // Automatic for Mali (vendor 0x13B5) - the 1.5 GB initial allocation works on r49p1.
@@ -4808,14 +4793,16 @@ bool vk_heap_place(uint64_t size) {
     }
     // Track if memory is non-coherent (needs manual flush/invalidate)
     gmem_non_coherent = (type >= 0) && ((mp.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0);
+    // Offset mapping: compute offset from HEAP_BASE
+    gmem_offset = (uintptr_t)p >= HEAP_BASE ? (uintptr_t)p - HEAP_BASE : 0;
     gmem_buf = buf;
     gmem_mem = mem;
     gmem_size = size;
     gmem_placed = true;
     gcopy_mode = false;
     gwin_mode = size > g_vk.props.limits.maxStorageBufferRange && !getenv("LARECOMP_VK_NO_GWIN");
-    LOG("[vk] guest heap %llu MB is GPU memory (%s at %llx, memory type %d, flags 0x%x, storage range %llu MB)%s\n",
-        (unsigned long long)(size >> 20), !memfd ? "placed" : ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT ? "a dma-buf mapped" : "an exported file mapped", (unsigned long long)HEAP_BASE, type,
+    LOG("[vk] guest heap %llu MB is GPU memory (%s at %p (offset %llu from HEAP_BASE), memory type %d, flags 0x%x, storage range %llu MB)%s\n",
+        (unsigned long long)(size >> 20), !memfd ? "placed" : ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT ? "a dma-buf mapped" : "an exported file mapped", p, (unsigned long long)gmem_offset, type,
         (unsigned)mp.memoryTypes[type].propertyFlags,
         (unsigned long long)(g_vk.props.limits.maxStorageBufferRange >> 20), gwin_mode ? "; draws reach global memory through windows" : "");
     return true;
@@ -4835,10 +4822,10 @@ static VkDescriptorBufferInfo gmem_info(void) {
 #ifdef __ANDROID__
     if (gmem_buf) {  // (a storage buffer's range is limited: 2 GB on Adreno; the heap may be larger)
         uint64_t range = gmem_size < g_vk.props.limits.maxStorageBufferRange ? gmem_size : g_vk.props.limits.maxStorageBufferRange & ~3ull;
-        return (VkDescriptorBufferInfo){gmem_buf, 0, range};
+        return (VkDescriptorBufferInfo){gmem_buf, gmem_offset, range};
     }
 #endif
-    if (gmem_buf) return (VkDescriptorBufferInfo){gmem_buf, 0, gmem_size};
+    if (gmem_buf) return (VkDescriptorBufferInfo){gmem_buf, gmem_offset, gmem_size};
     static uint32_t zero[1024];
     VkSpan s = vk_transient_copy(zero, sizeof zero, 256);
     return (VkDescriptorBufferInfo){s.buf, s.off, sizeof zero};
