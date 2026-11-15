@@ -5,6 +5,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include <vulkan/vulkan.h>
 
 typedef struct { float vp[4][4]; uint64_t size; bool valid; } FramegenCam;
 extern FramegenCam g_framegen_cam;
@@ -13,3 +14,10 @@ void framegen_camera(const float *u, uint64_t size);  // (the scene G-buffer pas
 void framegen_link(const float *p, uint64_t size);     // (the actor's position, per frame)
 bool framegen_enabled(void);
 bool framegen_generate(void);  // (the last real frame was composited: build the intermediate to present next)
+
+// Integration with present path
+void framegen_after_real_frame(VkCommandBuffer cb, VkImageView color_view, VkFormat color_fmt,
+                                VkImageView depth_view, VkFormat depth_fmt, VkExtent2D extent);
+bool framegen_should_generate(void);
+void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkFormat target_fmt, VkExtent2D extent);
+void framegen_get_current_vp(float out[4][4]);

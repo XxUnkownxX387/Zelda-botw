@@ -1514,6 +1514,12 @@ void backend_present(NvnTexture *t) {
     g_last_presented = t;
     TexBackend *b = vk_tex(t, true);
     b->presented = true;
+
+    // Framegen: after real frame presented, store for next warp
+    extern void framegen_after_real_frame(VkCommandBuffer, VkImageView, VkFormat, VkImageView, VkFormat, VkExtent2D);
+    VkCommandBuffer cb = vk_cmd();
+    framegen_after_real_frame(cb, b->view, b->format, b->ds_view, b->ds_format, g_vk.sc_extent);
+
     vk_end_pass();
 #ifdef __ANDROID__
     vk_bc_shadows_resolve(NULL, NULL, NULL, 0);  // (BC textures drawn into: decoded, as before anything outside a pass)
@@ -1582,7 +1588,17 @@ void backend_present(NvnTexture *t) {
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
         bool shot = win_shot && (long)total_frames + 1 == win_shot;
-        vk_frame_end(shot ? "build/window.png" : NULL);
+
+        // Framegen: if we should generate a frame, render the warp instead of ending the frame
+        extern bool framegen_should_generate(void);
+        extern void framegen_present_generated(VkCommandBuffer, VkImageView, VkFormat, VkExtent2D);
+        if (framegen_should_generate()) {
+            framegen_present_generated(cb, b->view, b->format, g_vk.sc_extent);
+            // Still need to end the frame properly
+            vk_frame_end(shot ? "build/window.png" : NULL);
+        } else {
+            vk_frame_end(shot ? "build/window.png" : NULL);
+        }
         if (shot && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else {
         renderer_submit();
