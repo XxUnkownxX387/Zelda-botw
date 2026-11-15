@@ -4478,22 +4478,20 @@ static bool vk_heap_place_ahb(uint64_t size) {
     int type = -1;
     VkPhysicalDeviceMemoryProperties mp;
     vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
+    LOG("[vk] Mali AHB DEBUG: AHB memory types = 0x%x, buffer mr.memoryTypeBits = 0x%x\n",
+        ahb_memory_types, mr.memoryTypeBits);
     for (uint32_t i = 0; i < 32; i++) {
         if (!(ahb_memory_types & (1u << i))) continue;
         VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
-        LOG("[vk] Mali AHB: checking type %d: flags=0x%x, need=0x%x\n", i, f,
+        LOG("[vk] Mali AHB DEBUG: type %d: AHB has it, mp flags=0x%x, VISIBLE=0x%x, COHERENT=0x%x, need=0x%x\n",
+            i, f, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if ((f & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-            (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-            // Verify this type is also in the buffer's supported types (should be for AHB import)
-            if (mr.memoryTypeBits & (1u << i)) {
-                type = (int)i;
-                break;
-            } else {
-                LOG("[vk] Mali AHB: AHB supports type %d (host-visible) but buffer doesn't - trying anyway\n", i);
-                type = (int)i;  // Try anyway for AHB import
-                break;
-            }
+        uint32_t need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        if ((f & need) == need) {
+            LOG("[vk] Mali AHB DEBUG: type %d MATCHES host-visible+coherent, buffer supports=%d\n",
+                i, (mr.memoryTypeBits & (1u << i)) ? 1 : 0);
+            type = (int)i;
+            break;
         }
     }
     if (type < 0) {
