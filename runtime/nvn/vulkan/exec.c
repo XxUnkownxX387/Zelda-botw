@@ -1892,6 +1892,33 @@ static void vk_end_pass_at(int line) {
     if (!in_pass) return;
     if (prof && line < 4096) prof_end_line[line]++;
     vk_end_rendering(vk_cmd());
+    
+    // Framegen: capture main scene pass (G-buffer) depth/color for warp
+    extern bool framegen_enabled(void);
+    extern bool framepace_gen_doubled(void);
+    extern void framegen_store_prev_frame(VkCommandBuffer, VkImage, VkImageView, VkFormat,
+                                           VkImage, VkImageView, VkFormat, VkExtent2D, const float[4][4]);
+    if (framegen_enabled() && framepace_gen_doubled()) {
+        // Main scene pass: 3+ color attachments + depth (G-buffer)
+        if (st.rt.depth && st.rt.ncolor >= 3 && st.rt.color[0]) {
+            VkCommandBuffer cb = vk_cmd();
+            static const VkComponentMapping id = {0};
+            VkImageView color_view = vk_image_view(st.rt.color[0], VK_IMAGE_VIEW_TYPE_2D, st.rt.color[0]->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+            VkImageView depth_view = VK_NULL_HANDLE;
+            VkFormat depth_format = VK_FORMAT_UNDEFINED;
+            if (st.rt.depth && st.rt.has_dview) {
+                depth_view = vk_view(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
+                depth_format = st.rt.depth->format;
+            }
+            // Get current VP from framegen camera
+            extern void framegen_get_current_vp(float out[4][4]);
+            float curr_vp[4][4];
+            framegen_get_current_vp(curr_vp);
+            framegen_store_prev_frame(cb, st.rt.color[0]->image, color_view, st.rt.color[0]->format,
+                                       st.rt.depth ? st.rt.depth->image : VK_NULL_HANDLE, depth_view, depth_format,
+                                       (VkExtent2D){st.rt.color[0]->width, st.rt.color[0]->height}, curr_vp);
+        }
+    }
     in_pass = false;
     {   extern const TexBackend *g_dump_sampled;
         if (g_dump_sampled) { const TexBackend *db = g_dump_sampled; g_dump_sampled = NULL; dump_layers_raw(db); }
@@ -1957,17 +1984,9 @@ static int rt_kind(uint32_t f);
 static volatile uint64_t g_scene_frame;
 uint64_t vk_scene_frame(void) { return g_scene_frame; }
 
-// Framegen accessors for current render target depth
-VkImageView framegen_get_depth_view(void) {
-    if (st.rt.depth && st.rt.has_dview) {
-        return vk_view(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
-    }
-    return VK_NULL_HANDLE;
-}
-
-NvnTexture* framegen_get_depth_texture(void) {
-    return st.rt.depth;
-}
+// Framegen capture is now done at end of main scene pass (vk_end_pass in exec.c)
+// VkImageView framegen_get_depth_view(void) { ... }
+// NvnTexture* framegen_get_depth_texture(void) { ... }
 
 static VkRect2D scissor_rect(void);
 static void begin_pass(void) {

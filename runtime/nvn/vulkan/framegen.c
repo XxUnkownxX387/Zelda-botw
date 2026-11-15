@@ -326,23 +326,8 @@ void framegen_get_current_vp(float out[4][4]) {
     }
 }
 
-// Called from device.c present path - after a real frame is presented
-void framegen_after_real_frame(VkCommandBuffer cb, VkImageView color_view, VkFormat color_fmt,
-                                VkImageView depth_view, VkFormat depth_fmt, VkExtent2D extent) {
-    if (!framegen_enabled() || !framepace_gen_doubled()) return;
-
-    LOG("[framegen] after_real_frame: color_view=%p, depth_view=%p, color_fmt=%d, depth_fmt=%d\n",
-        color_view, depth_view, color_fmt, depth_fmt);
-
-    // Get current VP
-    float curr_vp[4][4];
-    framegen_get_current_vp(curr_vp);
-
-    // Store this real frame for next warp
-    framegen_store_prev_frame(cb, VK_NULL_HANDLE, color_view, VK_FORMAT_UNDEFINED,
-                               VK_NULL_HANDLE, depth_view, VK_FORMAT_UNDEFINED,
-                               extent, curr_vp);
-}
+// Framegen capture is now done at end of main scene pass (vk_end_pass in exec.c)
+// void framegen_after_real_frame(...) { ... }
 
 // Check if we should generate a frame instead of presenting real frame
 bool framegen_should_generate(void) {
