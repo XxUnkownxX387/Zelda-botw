@@ -105,6 +105,9 @@ void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageV
                                 VkExtent2D extent, const float vp[4][4]) {
     if (!framegen_enabled() || !framepace_gen_doubled()) return;
 
+    LOG("[framegen] store_prev_frame: color_view=%p, depth_view=%p, fg_has_prev_frame_before=%d\n",
+        color_view, depth_view, fg_has_prev_frame);
+
     // Store previous frame's VP for half-step calculation
     if (fg_has_prev_frame) {
         // Compute half-step VP: interpolate between prev and current
@@ -123,6 +126,8 @@ void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageV
     }
     memcpy(fg_prev_vp, vp, sizeof fg_prev_vp);
     fg_has_prev_frame = true;
+
+    LOG("[framegen] store_prev_frame: fg_has_prev_frame_after=%d\n", fg_has_prev_frame);
 
     // Store color/depth images for warp
     fg_prev_color_image = color_image;
@@ -326,19 +331,29 @@ void framegen_after_real_frame(VkCommandBuffer cb, VkImageView color_view, VkFor
                                 VkImageView depth_view, VkFormat depth_fmt, VkExtent2D extent) {
     if (!framegen_enabled() || !framepace_gen_doubled()) return;
 
+    LOG("[framegen] after_real_frame: color_view=%p, depth_view=%p, color_fmt=%d, depth_fmt=%d\n",
+        color_view, depth_view, color_fmt, depth_fmt);
+
     // Get current VP
     float curr_vp[4][4];
     framegen_get_current_vp(curr_vp);
 
     // Store this real frame for next warp
-    framegen_store_prev_frame(cb, VK_NULL_HANDLE, color_view, color_fmt,
-                               VK_NULL_HANDLE, depth_view, depth_fmt,
+    framegen_store_prev_frame(cb, VK_NULL_HANDLE, color_view, VK_FORMAT_UNDEFINED,
+                               VK_NULL_HANDLE, depth_view, VK_FORMAT_UNDEFINED,
                                extent, curr_vp);
 }
 
 // Check if we should generate a frame instead of presenting real frame
 bool framegen_should_generate(void) {
-    return framegen_enabled() && framepace_gen_doubled() && fg_has_prev_frame;
+    static int logged = -1;
+    bool result = framegen_enabled() && framepace_gen_doubled() && fg_has_prev_frame;
+    if (logged < 0) {
+        LOG("[framegen] framegen_should_generate: enabled=%d, doubled=%d, has_prev=%d -> %d\n",
+            framegen_enabled(), framepace_gen_doubled(), fg_has_prev_frame, result);
+        logged = 1;
+    }
+    return result;
 }
 
 // Render a generated frame (warp) to the swapchain image
