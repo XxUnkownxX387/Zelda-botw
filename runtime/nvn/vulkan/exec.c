@@ -4704,9 +4704,14 @@ bool vk_heap_place(uint64_t size) {
         type = -1;  // host-visible and coherent (the CPU writes, the GPU reads and writes); cached when there is one
         // The buffer's memoryTypeBits is already filtered by the driver for the external handle type
         // we requested via VkExternalMemoryBufferCreateInfo. Just use it directly.
+        LOG("[vk] Mali memfd DEBUG: handle_type=%s, mr.memoryTypeBits=0x%x, need=0x%x\n",
+            ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT ? "DMA_BUF" : "OPAQUE_FD",
+            mr.memoryTypeBits, need);
         for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
             if (!(mr.memoryTypeBits & (1u << i))) continue;
             VkMemoryPropertyFlags f = mp.memoryTypes[i].propertyFlags;
+            LOG("[vk] Mali memfd DEBUG: type %d: mr has it, flags=0x%x, need=0x%x, match=%d\n",
+                i, f, need, ((f & need) == need) ? 1 : 0);
             if ((f & need) != need) continue;
             if (type < 0 || (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) type = (int)i;
             if (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) break;
