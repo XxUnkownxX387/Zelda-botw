@@ -64,13 +64,26 @@ void framegen_camera(const float *u, uint64_t size) {
 
 void framegen_link(const float *p, uint64_t size) { (void)p; (void)size; }  // (the player's position: not yet read)
 
-bool framegen_enabled(void) { return g_settings.framegen; }  // (Video > Frame generation: off by default)
+bool framegen_enabled(void) { 
+    static int logged = -1;
+    if (logged < 0) {
+        LOG("[framegen] framegen_enabled: g_settings.framegen=%d\n", g_settings.framegen);
+        logged = 1;
+    }
+    return g_settings.framegen; 
+}  // (Video > Frame generation: off by default)
 
 bool framegen_generate(void) {
     // (the frame after a real frame, generated from it - the intermediate to present: the warp of the scene with the
     // camera's half step ahead, the depth of the frame before, the HUD copied at the compositing - lands with the
     // backend; this is the generation's switch: a generated frame is owed when the option is on and the player is
     // actually moving in the world, and not in a menu, a movie, an event or a pause)
+    static int logged = -1;
+    if (logged < 0) {
+        LOG("[framegen] framegen_generate: enabled=%d, framepace_doubled=%d, movie=%d, menu=%d, event=%d, title=%d, pace_on=%d\n",
+            framegen_enabled(), framepace_gen_doubled(), g_movie_playing > 0, framepace_in_menu(), framepace_in_event(), framepace_on_title(), framepace_on());
+        logged = 1;
+    }
     if (!framegen_enabled()) return false;
     if (g_movie_playing > 0) return false;  // (a movie: the generated frames aren't its)
     if (framepace_in_menu()) return false;

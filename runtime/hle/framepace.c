@@ -122,8 +122,14 @@ int framepace_target(void) {
     // rate is one of the generated ones (30, 20 - below 60), the frames the player sees are generated between two real
     // ones - so the rate they are shown at is doubled - but only in the world: not in a menu, a movie, an event or a pause
     // (there the frames are the real ones, at the rate the game holds itself there).
+    static int logged_gd = -1;
     g_gen_doubled = g_settings.framegen && framepace_on() && !g_movie_playing && !in_menu() && !in_event() &&
                      !framepace_on_title() && fps > 0 && fps * 2 <= 60;
+    if (logged_gd < 0) {
+        LOG("[framepace] g_gen_doubled=%d: framegen=%d, pace_on=%d, movie=%d, menu=%d, event=%d, title=%d, fps=%d, fps*2<=%d\n",
+            g_gen_doubled, g_settings.framegen, framepace_on(), g_movie_playing > 0, in_menu(), in_event(), framepace_on_title(), fps, 60);
+        logged_gd = 1;
+    }
     if (g_gen_doubled) fps *= 2;
     return fps;
 }
