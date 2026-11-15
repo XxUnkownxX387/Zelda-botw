@@ -360,9 +360,72 @@ bool framegen_should_generate(void) {
 void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkFormat target_fmt, VkExtent2D extent) {
     if (!framegen_should_generate()) return;
 
-    // For now, just clear the target as placeholder
-    // Full warp implementation will replace this
-    VkClearColorValue clear = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(cb, target_view, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
+
+    if (!fg_prev_color_view || !fg_prev_depth_view) {
+        // Fallback: clear black if no previous frame data
+        VkClearColorValue clear = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cb, target_view, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+        return;
+    }
+
+    framegen_ensure_pipeline();
+
+    // Update uniform buffer with VP matrices
+    struct { float prev_vp[4][4]; float curr_vp[4][4]; float gen_vp[4][4]; float extent[2]; } *ub_data;
+    VkSpan ub_span = vk_transient(sizeof(*ub_data), 256);
+    ub_data = ub_span.ptr;
+    if (!ub_data) return;
+
+    memcpy(ub_data->prev_vp, fg_prev_vp, sizeof fg_prev_vp);
+    extern void framegen_get_current_vp(float out[4][4]);
+    framegen_get_current_vp(ub_data->curr_vp);
+    memcpy(ub_data->gen_vp, fg_gen_vp, sizeof fg_gen_vp);
+    ub_data->extent[0] = (float)fg_extent.width;
+    ub_data->extent[1] = (float)fg_extent.height;
+
+    // Update descriptor set with previous frame's color/depth + uniform buffer
+    VkDescriptorImageInfo color_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_color_view,
+                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo depth_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_depth_view,
+                                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo ub_info = {.buffer = ub_span.buf, .offset = ub_span.off, .range = sizeof(*ub_data)};
+
+    VkWriteDescriptorSet writes[3] = {
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 0,
+         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &color_info},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 1,
+         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &depth_info},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 2,
+         .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &ub_info},
+    };
+    vkUpdateDescriptorSets(g_vk.dev, 3, writes, 0, NULL);
+
+    // Render the warp
+    VkRenderingAttachmentInfo color_att = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                           .imageView = target_view,
+                                           .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                           .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                           .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                          .renderArea = {{0, 0}, extent},
+                          .layerCount = 1,
+                          .colorAttachmentCount = 1,
+                          .pColorAttachments = &color_att,
+                          .pDepthAttachment = NULL,
+                          .pStencilAttachment = NULL};
+    vk_begin_rendering(cb, &ri, &target_fmt, VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT);
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fg_pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fg_pipeline_layout, 0, 1, &fg_desc_set, 0, NULL);
+    
+    VkViewport viewport = {0, 0, (float)extent.width, (float)extent.height, 0, 1};
+    VkRect2D scissor = {{0, 0}, extent};
+    vkCmdSetViewport(cb, 0, 1, &viewport);
+    vkCmdSetScissor(cb, 0, 1, &scissor);
+    
+    vkCmdDraw(cb, 4, 1, 0, 0);
+    
+    vk_end_rendering(cb);
 }
