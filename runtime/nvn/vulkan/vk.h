@@ -150,6 +150,9 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
 VkImageView vk_image_view(TexBackend *b, VkImageViewType type, VkFormat fmt, uint32_t lv0, uint32_t nlv, uint32_t ly0,
                           uint32_t nly, VkComponentMapping sw, VkImageAspectFlags aspect);
 VkImageView vk_dummy_view(int textype);
+// Framegen accessors for current render target depth
+VkImageView framegen_get_depth_view(void);
+NvnTexture* framegen_get_depth_texture(void);
 #ifdef __ANDROID__
 // A render target view of a CPU-decoded BC texture in a format of the block's size (GPU compression): a view of its
 // shadow image (*fmt, *w x *h: that format and level extent), else VK_NULL_HANDLE. vk_bc_shadows_resolve: the blocks

@@ -1957,6 +1957,18 @@ static int rt_kind(uint32_t f);
 static volatile uint64_t g_scene_frame;
 uint64_t vk_scene_frame(void) { return g_scene_frame; }
 
+// Framegen accessors for current render target depth
+VkImageView framegen_get_depth_view(void) {
+    if (st.rt.depth && st.rt.has_dview) {
+        return vk_view(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
+    }
+    return VK_NULL_HANDLE;
+}
+
+NvnTexture* framegen_get_depth_texture(void) {
+    return st.rt.depth;
+}
+
 static VkRect2D scissor_rect(void);
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;

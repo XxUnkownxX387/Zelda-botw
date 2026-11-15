@@ -1518,7 +1518,20 @@ void backend_present(NvnTexture *t) {
     // Framegen: after real frame presented, store for next warp
     extern void framegen_after_real_frame(VkCommandBuffer, VkImageView, VkFormat, VkImageView, VkFormat, VkExtent2D);
     VkCommandBuffer cb = vk_cmd();
-    framegen_after_real_frame(cb, b->view, b->format, b->ds_view, b->ds_format, g_vk.sc_extent);
+    
+    // Get color image view from swapchain texture
+    static const VkComponentMapping id = {0};
+    VkImageView color_view = vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, b->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+    
+    // Get depth image view from render target state (exec.c)
+    extern VkImageView framegen_get_depth_view(void);
+    VkImageView depth_view = framegen_get_depth_view();
+    VkFormat depth_format = VK_FORMAT_UNDEFINED;
+    extern NvnTexture* framegen_get_depth_texture(void);
+    NvnTexture* depth_tex = framegen_get_depth_texture();
+    if (depth_tex) depth_format = depth_tex->format;
+    
+    framegen_after_real_frame(cb, color_view, b->format, depth_view, depth_format, g_vk.sc_extent);
 
     vk_end_pass();
 #ifdef __ANDROID__

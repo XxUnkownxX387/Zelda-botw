@@ -248,7 +248,7 @@ static void framegen_update_descriptors(VkDeviceMemory ub_mem, VkBuffer ub_buffe
                                         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo depth_info = {.sampler = VK_NULL_HANDLE, .imageView = fg_prev_depth_view,
                                         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorBufferInfo ub_info = {.buffer = ub_buffer, .offset = ub_offset, .size = ub_size};
+    VkDescriptorBufferInfo ub_info = {.buffer = ub_buffer, .offset = ub_offset, .range = ub_size};
 
     VkWriteDescriptorSet writes[3] = {
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fg_desc_set, .dstBinding = 0,
@@ -270,7 +270,8 @@ void framegen_render_generated(VkCommandBuffer cb, VkImageView target_view, VkFo
 
     // Update uniform buffer with VP matrices
     struct { float prev_vp[4][4]; float curr_vp[4][4]; float gen_vp[4][4]; float extent[2]; } *ub_data;
-    VkBuffer ub_buffer = vk_transient_ub(sizeof(*ub_data), 256, (void**)&ub_data);
+    VkSpan ub_span = vk_transient(sizeof(*ub_data), 256);
+    ub_data = ub_span.ptr;
     if (!ub_data) return;
 
     memcpy(ub_data->prev_vp, fg_prev_vp, sizeof fg_prev_vp);
@@ -281,7 +282,7 @@ void framegen_render_generated(VkCommandBuffer cb, VkImageView target_view, VkFo
     ub_data->extent[0] = (float)fg_extent.width;
     ub_data->extent[1] = (float)fg_extent.height;
 
-    framegen_update_descriptors(VK_NULL_HANDLE, VK_NULL_HANDLE, 0, sizeof(*ub_data));
+    framegen_update_descriptors(VK_NULL_HANDLE, ub_span.buf, ub_span.off, sizeof(*ub_data));
 
     // Render
     VkRenderingAttachmentInfo color_att = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -317,10 +318,9 @@ void framegen_after_real_frame(VkCommandBuffer cb, VkImageView color_view, VkFor
     framegen_get_current_vp(curr_vp);
 
     // Store this real frame for next warp
-    framegen_store_prev_frame(cb, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_FORMAT_UNDEFINED,
-                               VK_NULL_HANDLE, VK_NULL_HANDLE, VK_FORMAT_UNDEFINED,
-                               g_vk.sc_extent, curr_vp);
-    // Note: actual color/depth views are passed from present path
+    framegen_store_prev_frame(cb, VK_NULL_HANDLE, color_view, color_fmt,
+                               VK_NULL_HANDLE, depth_view, depth_fmt,
+                               extent, curr_vp);
 }
 
 // Check if we should generate a frame instead of presenting real frame
@@ -332,16 +332,9 @@ bool framegen_should_generate(void) {
 void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkFormat target_fmt, VkExtent2D extent) {
     if (!framegen_should_generate()) return;
 
-    // For now, just blit the previous color to target as placeholder
+    // For now, just clear the target as placeholder
     // Full warp implementation will replace this
-    VkImageBlit blit = {
-        .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-        .srcOffsets = {{0, 0, 0}, {1920, 1080, 1}},
-        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-        .dstOffsets = {{0, 0, 0}, {(int)extent.width, (int)extent.height, 1}},
-    };
-    // We need the previous color image - for now just clear
     VkClearColorValue clear = {{0.0f, 0.0f, 0.0f, 1.0f}};
     VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    // vkCmdClearColorImage(cb, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    vkCmdClearColorImage(cb, target_view, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
 }
