@@ -1903,20 +1903,39 @@ static void vk_end_pass_at(int line) {
         if (st.rt.depth && st.rt.ncolor >= 3 && st.rt.color[0]) {
             VkCommandBuffer cb = vk_cmd();
             static const VkComponentMapping id = {0};
-            VkImageView color_view = vk_image_view(st.rt.color[0], VK_IMAGE_VIEW_TYPE_2D, st.rt.color[0]->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+            // Get TexBackend from NvnTexture for color[0] and depth
+            TexBackend *color_backend = st.rt.color[0] ? (TexBackend *)st.rt.color[0]->backend : NULL;
+            TexBackend *depth_backend = st.rt.depth ? (TexBackend *)st.rt.depth->backend : NULL;
+            
+            VkImageView color_view = VK_NULL_HANDLE;
+            VkFormat color_format = VK_FORMAT_UNDEFINED;
+            VkImage color_image = VK_NULL_HANDLE;
+            if (color_backend) {
+                static const VkComponentMapping id = {0};
+                color_view = vk_image_view(color_backend, VK_IMAGE_VIEW_TYPE_2D, color_backend->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+                color_format = color_backend->format;
+                color_image = color_backend->image;
+            }
+            
             VkImageView depth_view = VK_NULL_HANDLE;
             VkFormat depth_format = VK_FORMAT_UNDEFINED;
-            if (st.rt.depth && st.rt.has_dview) {
+            VkImage depth_image = VK_NULL_HANDLE;
+            if (st.rt.depth && st.rt.has_dview && depth_backend) {
                 depth_view = vk_view(st.rt.depth, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
-                depth_format = st.rt.depth->format;
+                depth_format = depth_backend->format;
+                depth_image = depth_backend->image;
             }
+            
             // Get current VP from framegen camera
             extern void framegen_get_current_vp(float out[4][4]);
             float curr_vp[4][4];
             framegen_get_current_vp(curr_vp);
-            framegen_store_prev_frame(cb, st.rt.color[0]->image, color_view, st.rt.color[0]->format,
-                                       st.rt.depth ? st.rt.depth->image : VK_NULL_HANDLE, depth_view, depth_format,
-                                       (VkExtent2D){st.rt.color[0]->width, st.rt.color[0]->height}, curr_vp);
+            VkExtent2D extent = {st.rt.color[0] ? st.rt.color[0]->width : 0, st.rt.color[0] ? st.rt.color[0]->height : 0};
+            if (extent.width && extent.height) {
+                framegen_store_prev_frame(cb, color_image, color_view, color_format,
+                                           depth_image, depth_view, depth_format,
+                                           extent, curr_vp);
+            }
         }
     }
     in_pass = false;
