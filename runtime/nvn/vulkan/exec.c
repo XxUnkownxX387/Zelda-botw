@@ -4512,6 +4512,7 @@ static bool vk_heap_place_ahb(uint64_t size) {
     }
     LOG("[vk] Mali AHB: using memory type %d\n", type);
 
+    LOG("[vk] Mali AHB DEBUG: vkAllocateMemory...\n");
     ai.memoryTypeIndex = (uint32_t)type;
     VkDeviceMemory mem;
     if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) {
@@ -4520,6 +4521,9 @@ static bool vk_heap_place_ahb(uint64_t size) {
         AHardwareBuffer_release(ahb);
         return false;
     }
+    LOG("[vk] Mali AHB DEBUG: vkAllocateMemory OK, mem=%p\n", mem);
+
+    LOG("[vk] Mali AHB DEBUG: vkBindBufferMemory...\n");
     if (vkBindBufferMemory(g_vk.dev, buf, mem, 0) != VK_SUCCESS) {
         LOG("[vk] Mali AHB: vkBindBufferMemory failed\n");
         vkFreeMemory(g_vk.dev, mem, NULL);
@@ -4527,11 +4531,13 @@ static bool vk_heap_place_ahb(uint64_t size) {
         AHardwareBuffer_release(ahb);
         return false;
     }
+    LOG("[vk] Mali AHB DEBUG: vkBindBufferMemory OK\n");
 
     // Map the AHardwareBuffer at HEAP_BASE
     void *p = NULL;
     VkMemoryMapInfoKHR mi = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
-    VkResult r = vkMapMemory2KHR(g_vk.dev, &mi, &p);
+    LOG("[vk] Mali AHB DEBUG: vkMapMemory2KHR (first)...\n");
+    VkResult r = vkMapMemory2KHR(g_vk.dev, &(VkMemoryMapInfoKHR){.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE}, &p);
     if (r != VK_SUCCESS || !p) {
         LOG("[vk] Mali AHB: vkMapMemory2KHR failed (%d)\n", r);
         vkFreeMemory(g_vk.dev, mem, NULL);
@@ -4543,11 +4549,13 @@ static bool vk_heap_place_ahb(uint64_t size) {
 
     // Remap at HEAP_BASE if not already there
     if (p != (void *)(uintptr_t)HEAP_BASE) {
+        LOG("[vk] Mali AHB DEBUG: attempting placed map at HEAP_BASE...\n");
         // Try to unmap and remap with placed mapping
         vkUnmapMemory2KHR(g_vk.dev, &(VkMemoryUnmapInfoKHR){.sType = VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, .memory = mem});
         VkMemoryMapPlacedInfoEXT pl = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_PLACED_INFO_EXT, .pPlacedAddress = (void *)(uintptr_t)HEAP_BASE};
         VkMemoryMapInfoKHR mi2 = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .pNext = &pl, .flags = VK_MEMORY_MAP_PLACED_BIT_EXT,
                                   .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
+        LOG("[vk] Mali AHB DEBUG: vkMapMemory2KHR (placed)...\n");
         r = vkMapMemory2KHR(g_vk.dev, &mi2, &p);
         if (r != VK_SUCCESS || p != (void *)(uintptr_t)HEAP_BASE) {
             LOG("[vk] Mali AHB: placed map at HEAP_BASE failed (%d), using offset mapping (offset %p)\n", r, (void *)((uintptr_t)p - HEAP_BASE));
