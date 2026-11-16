@@ -4873,7 +4873,7 @@ bool vk_heap_place(uint64_t size) {
         LOG("[vk] heap placement failed: mapped at %p, expected %p (size %llu MB, type %d)\n",
             p, (void *)HEAP_BASE, (unsigned long long)(size >> 20), type);
         if (memfd) munmap(p, size);
-        else vkUnmapMemory2KHR(g_vk.dev, &(VkMemoryUnmapInfoKHR){.sType = VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE});
+        else vkUnmapMemory2KHR(g_vk.dev, &(VkMemoryUnmapInfoKHR){.sType = VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, .memory = mem});
         if (mem) vkFreeMemory(g_vk.dev, mem, NULL);
         vkDestroyBuffer(g_vk.dev, buf, NULL);
         if (mali && g_vk.mem_ahb && !getenv("LARECOMP_VK_NO_AHB")) {
