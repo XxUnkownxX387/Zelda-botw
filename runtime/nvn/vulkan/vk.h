@@ -58,7 +58,6 @@ typedef struct {
     bool mem_fd;                  // VK_KHR_external_memory_fd: the same through an exported file mapped there (vk_heap_place)
     bool mem_dmabuf;              // VK_EXT_external_memory_dma_buf: that file as a dma-buf, when the opaque one won't do
     bool feedback_loop_layout;    // VK_EXT_attachment_feedback_loop_layout: draw reads target it writes in place (resolve_feedback)
-    bool mem_ahb;               // VK_ANDROID_external_memory_android_hardware_buffer: AHardwareBuffer heap import
     uint64_t placed_align;
     bool exec_stats;              // (Android, LARECOMP_SHADER_STATS=1) the compiler's statistics of each pipeline, logged
     uint32_t api;                 // the device's Vulkan version as used: 1.3, or 1.1 / 1.2 with extensions (device.c)
