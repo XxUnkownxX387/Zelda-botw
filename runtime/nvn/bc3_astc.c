@@ -131,12 +131,10 @@ static int write_astc_dual_plane(uint16_t c0, uint16_t c1, uint32_t idx, const u
     }
     
     // Alpha weights: map 0-255 alpha to 0-3 weight (4 levels)
-    // The alpha array should be passed in
     for (int i = 0; i < 16; i++) {
         w[16 + i] = alpha[i] >> 6;  // 0-255 -> 0-3
     }
     
-    Bits b = {{0, 0}};
     int len = put_weights(&b, w, 32, 0);  // 32 weights, 2 bits each, not trits
     
     // Header for dual-plane 4x4, two planes, 4 levels (2 bits each) = CEM 12
