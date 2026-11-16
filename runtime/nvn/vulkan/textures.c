@@ -261,10 +261,10 @@ static VkFormat bc_target(VkFormat bc, uint32_t *bpp) {
         *bpp = 0; return bc == VK_FORMAT_BC3_SRGB_BLOCK ? VK_FORMAT_ASTC_4x4_SRGB_BLOCK : VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
     }
     if (use_astc_bc3 && (bc == VK_FORMAT_BC4_UNORM_BLOCK || bc == VK_FORMAT_BC4_SNORM_BLOCK)) {
-        *bpp = 0; return bc == VK_FORMAT_BC4_SNORM_BLOCK ? VK_FORMAT_ASTC_4x4_SNORM_BLOCK : VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+        *bpp = 0; return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
     }
     if (use_astc_bc3 && (bc == VK_FORMAT_BC5_UNORM_BLOCK || bc == VK_FORMAT_BC5_SNORM_BLOCK)) {
-        *bpp = 0; return bc == VK_FORMAT_BC5_SNORM_BLOCK ? VK_FORMAT_ASTC_4x4_SNORM_BLOCK : VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+        *bpp = 0; return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
     }
     switch (bc) {
     case VK_FORMAT_BC1_RGB_UNORM_BLOCK: case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
@@ -320,7 +320,7 @@ static void bc_decode(VkFormat bc, const uint8_t *blocks, uint32_t wb, uint32_t 
                     for (uint32_t x = 0; x < wb; x++) {
                         const uint8_t *a = astc_out + ((uint64_t)y * wb + x) * 16;
                         uint8_t *o = out + ((uint64_t)y * wb + x) * 4 * bpp;
-                        astc_decode(a, o, 4, bpp == 4);
+                        astc_decode_block(a, 4, 4, bpp == 4, (uint8_t *)o);
                     }
                 }
                 free(astc_out);

@@ -4,6 +4,7 @@
 // BC5 (two channels) -> ASTC 4x4 luminance+alpha (CEM 4)
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 
 // n BC3 blocks (16 bytes each) -> n ASTC 4x4 blocks (16 bytes each)
 // Decodes BC3 (BC1 color + smooth alpha) to ASTC 4x4 dual-plane (RGBA endpoints CEM 12 / 8+alpha)
