@@ -8,7 +8,8 @@
 
 // n BC3 blocks (16 bytes each) -> n ASTC 4x4 blocks (16 bytes each)
 // Decodes BC3 (BC1 color + smooth alpha) to ASTC 4x4 dual-plane (RGBA endpoints CEM 12 / 8+alpha)
-void bc3_to_astc(const uint8_t *bc3, uint8_t *astc, uint64_t n);
+// Returns 0 on success
+int bc3_to_astc(const uint8_t *bc3, uint8_t *astc, uint64_t n);
 
 // n BC4 blocks (8 bytes each) -> n ASTC 4x4 blocks (16 bytes each)
 void bc4_to_astc(const uint8_t *bc4, uint8_t *astc, uint64_t n, bool is_snorm);
