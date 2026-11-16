@@ -326,7 +326,6 @@ static void framegen_ensure_pipeline(void) {
     fg_pipeline_valid = true;
     LOG("[framegen] pipeline created successfully\n");
 }
-}
 
 // Update descriptor set with current frame's resources
 static void framegen_update_descriptors(VkDeviceMemory ub_mem, VkBuffer ub_buffer, VkDeviceSize ub_offset, VkDeviceSize ub_size) {
@@ -400,7 +399,7 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
         LOG("[framegen] dynamic rendering not available, skipping generation\n");
         return;
     }
-    if (!g_vk.extended_dynamic_state || !g_vk.dyn_render) {
+    if (!g_vk.eds || !g_vk.dyn_render) {
         LOG("[framegen] required Vulkan features not available, skipping generation\n");
         return;
     }
@@ -449,11 +448,7 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
                                  .dependencyFlags = 0,
                                  .imageMemoryBarrierCount = 1,
                                  .pImageMemoryBarriers = &depth_barrier};
-    VkResult res = vkCmdPipelineBarrier2(cb, &dep_info);
-    if (res != VK_SUCCESS) {
-        LOG("[framegen] depth layout transition failed: %d\n", res);
-        return;
-    }
+    vkCmdPipelineBarrier2(cb, &dep_info);
 
     // Update descriptor set with previous frame's color/depth + uniform buffer
     framegen_update_descriptors(VK_NULL_HANDLE, ub_span.buf, ub_span.off, sizeof(*ub_data));
@@ -471,29 +466,7 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
                           .pColorAttachments = &color_att,
                           .pDepthAttachment = NULL,
                           .pStencilAttachment = NULL};
-    VkResult res = vk_begin_rendering(cb, &ri, &target_fmt, VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT);
-    if (res != VK_SUCCESS) {
-        LOG("[framegen] vk_begin_rendering failed: %d\n", res);
-        // Transition depth back before returning
-        VkImageMemoryBarrier2 depth_barrier_back = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-            .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-            .dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = fg_prev_depth_image,
-            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}};
-
-        VkDependencyInfo dep_info_back = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                                          .dependencyFlags = 0,
-                                          .imageMemoryBarrierCount = 1,
-                                          .pImageMemoryBarriers = &depth_barrier_back};
-        vkCmdPipelineBarrier2(cb, &dep_info_back);
-        return;
-    }
+    vk_begin_rendering(cb, &ri, &target_fmt, VK_FORMAT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT);
 
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fg_pipeline);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, fg_pipeline_layout, 0, 1, &fg_desc_set, 0, NULL);
@@ -505,10 +478,7 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
     
     vkCmdDraw(cb, 4, 1, 0, 0);
     
-    VkResult res = vk_end_rendering(cb);
-    if (res != VK_SUCCESS) {
-        LOG("[framegen] vk_end_rendering failed: %d\n", res);
-    }
+    vk_end_rendering(cb);
 
     // Transition depth image back to DEPTH_STENCIL_ATTACHMENT for next frame
     VkImageMemoryBarrier2 depth_barrier_back = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
