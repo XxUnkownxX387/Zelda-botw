@@ -41,7 +41,6 @@ static void trits_init(void) {
         if (!seen[i]) seen[i] = 1, g_trit_code[i] = (uint8_t)T;
     }
 }
-static pthread_once_t g_trits_once = PTHREAD_ONCE_INIT;
 
 static int put_weights(Bits *b, const uint8_t *w, int n, int trits) {
     Bits s = {{0, 0}};
@@ -164,7 +163,7 @@ void bc3_to_astc(const uint8_t *bc3, uint8_t *astc, uint64_t n) {
 void bc4_to_astc(const uint8_t *bc4, uint8_t *astc, uint64_t n, bool is_snorm) {
     for (uint64_t i = 0; i < n; i++) {
         uint8_t rgba[16];
-        bcdec_bc4(bc4 + i * 8, rgba, 4, is_snorm);
+        bcdec_bc4(bc4 + i * 8, rgba, 4);
         // Convert to ASTC luminance
         memcpy(astc + i * 16, rgba, 16);  // placeholder
     }
@@ -177,7 +176,7 @@ void bc4_to_astc(const uint8_t *bc4, uint8_t *astc, uint64_t n, bool is_snorm) {
 void bc5_to_astc(const uint8_t *bc5, uint8_t *astc, uint64_t n, bool is_snorm) {
     for (uint64_t i = 0; i < n; i++) {
         uint8_t rgba[16];
-        bcdec_bc5(bc5 + i * 16, rgba, 4, is_snorm);
+        bcdec_bc5(bc5 + i * 16, rgba, 4);
         // Convert to ASTC luminance+alpha
         memcpy(astc + i * 16, rgba, 16);  // placeholder
     }
