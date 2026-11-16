@@ -17,6 +17,11 @@
 static uint64_t g_vram_used_bytes = 0;
 static uint64_t g_vram_budget_bytes = 0;
 
+// Live game textures (only used in this file): move static definitions here to avoid
+// "static declaration follows non-static declaration" error with extern below.
+static NvnTexture **g_live;
+static int g_nlive, g_cap_live;
+
 static void vram_budget_init(void) {
     if (g_vram_budget_bytes == 0 && g_settings.max_gpu_mem_mb > 0) {
         g_vram_budget_bytes = (uint64_t)g_settings.max_gpu_mem_mb * 1024 * 1024;
@@ -43,13 +48,11 @@ static void vram_budget_maybe_evict(uint64_t current_frame) {
     if (frame == current_frame) return;  // already processed this frame
 
     // Find LRU non-render-target texture to evict
-    extern NvnTexture **g_live;
-    extern int g_nlive;
     NvnTexture *victim = NULL;
     uint64_t oldest = UINT64_MAX;
     for (int i = 0; i < g_nlive; i++) {
         NvnTexture *t = g_live[i];
-        TexBackend *b = t ? t->backend : NULL;
+        TexBackend *b = t ? (TexBackend *)t->backend : NULL;
         if (!b) continue;
         // Skip render targets (rs_group != RS_NONE) and recently used (last 2 frames)
         if (b->rs_group != RS_NONE) continue;
@@ -60,10 +63,11 @@ static void vram_budget_maybe_evict(uint64_t current_frame) {
         }
     }
     if (victim) {
+        TexBackend *vb = victim->backend ? (TexBackend *)victim->backend : NULL;
         LOG("[vk] VRAM budget exceeded (%llu MB > %d MB): evicting texture %p (last used frame %llu, %llu MB)\n",
             (unsigned long long)(g_vram_used_bytes >> 20), g_settings.max_gpu_mem_mb,
             (void *)victim, (unsigned long long)oldest,
-            (unsigned long long)(victim->backend ? victim->backend->mem_size >> 20 : 0));
+            (unsigned long long)(vb ? vb->mem_size >> 20 : 0));
         extern void backend_texture_destroyed(NvnTexture *t);
         backend_texture_destroyed(victim);
     }
@@ -712,13 +716,12 @@ static void destroy_image(TexBackend *b) {
 }
 
 // Live game textures: an in-place reboot (vk_textures_reset) destroys them all.
-static NvnTexture **g_live;
-static int g_nlive, g_cap_live;
+// (static definitions at top of file: g_live, g_nlive, g_cap_live)
 // Their images' bytes on the GPU (the memory mappings log), *targets: the render targets' share (any thread: a racy sum)
 uint64_t vk_texture_bytes(uint64_t *targets) {
     uint64_t all = 0, rt = 0;
     for (int i = 0; i < g_nlive; i++) {
-        TexBackend *b = g_live[i] ? g_live[i]->backend : NULL;
+        TexBackend *b = g_live[i] ? (TexBackend *)g_live[i]->backend : NULL;
         if (!b || !b->mem) continue;
         VmaAllocationInfo info;
         vmaGetAllocationInfo(g_vk.vma, b->mem, &info);
@@ -736,7 +739,7 @@ int vk_texture_count(void) {
         int fin_held = 0, dup_addr = 0, gpu_own = 0, upl = 0;
         for (int i = 0; i < g_nlive; i++) {
             NvnTexture *t = g_live[i];
-            TexBackend *b = t->backend;
+            TexBackend *b = (TexBackend *)t->backend;
             if (t->finalized) fin_held++;
             if (b && b->gpu_owned) gpu_own++;
             if (b && b->uploaded) upl++;
@@ -786,7 +789,7 @@ static void live_remove(TexBackend *b) {
 }
 
 static TexBackend *tex_backend(NvnTexture *t) {
-    TexBackend *b = t->backend;
+    TexBackend *b = (TexBackend *)t->backend;
     if (b) {
         if (rs_stale(b)) {  // output resolution changed: reallocate
             destroy_image(b);
@@ -806,7 +809,7 @@ static TexBackend *tex_backend(NvnTexture *t) {
 static void texture_snapshot_forget(TexBackend *b);
 
 void backend_texture_destroyed(NvnTexture *t) {
-    TexBackend *b = t->backend;
+    TexBackend *b = (TexBackend *)t->backend;
     if (!b) return;
 #ifdef __ANDROID__
     extern void vk_async_drain(void);
@@ -1193,7 +1196,7 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
         uint64_t te = t->addr + tegra_total_size(&t->layout);
         for (int i = 0; on && n < 60 && i < g_nlive; i++) {
             NvnTexture *e = g_live[i];
-            TexBackend *eb = e->backend;
+            TexBackend *eb = (TexBackend *)e->backend;
             if (e == t || !e->addr || !eb || eb->gpu_owned || !eb->uploaded) continue;
             uint64_t ee = e->addr + tegra_total_size(&e->layout);
             if (e->addr >= te || ee <= t->addr) continue;
@@ -1560,7 +1563,7 @@ static BcShadow *bc_shadow_create(NvnTexture *t, TexBackend *b, VkFormat vf, uin
 
 // The format of the shadow a render target view of t draws into, VK_FORMAT_UNDEFINED when it draws without one
 static VkFormat bc_shadow_format(const NvnTexture *t, const NvnTextureView *v) {
-    const TexBackend *b = t->backend;
+    const TexBackend *b = (const TexBackend *)t->backend;
     if (!b || !b->bc_vf || !v || !(v->setmask & 4) || b->samples > 1) return VK_FORMAT_UNDEFINED;
     const FormatInfo *bf = t->layout.fmt, *vfi = nvn_format_info(v->format);
     if (!bf || !vfi || bf->bw != 4 || bf->bh != 4 || vfi->bw != 1 || vfi->bh != 1 || vfi->bpb != bf->bpb) return VK_FORMAT_UNDEFINED;
@@ -1572,7 +1575,7 @@ static VkFormat bc_shadow_format(const NvnTexture *t, const NvnTextureView *v) {
 }
 
 VkImageView vk_bc_shadow_view(NvnTexture *t, const NvnTextureView *v, VkFormat *fmt, uint32_t *w, uint32_t *h) {
-    TexBackend *b = t->backend;
+    TexBackend *b = (TexBackend *)t->backend;
     VkFormat vf = bc_shadow_format(t, v);
     if (!vf) return VK_NULL_HANDLE;
     const FormatInfo *bf = t->layout.fmt;
@@ -1673,7 +1676,7 @@ void vk_bc_shadows_resolve(NvnTexture *const *targets, const NvnTextureView *vie
 // before the texture becomes the GPU's. BOTW fills its 32x32x32 noise volume on the CPU and draws the mips from it (then
 // compresses it to BC4); never uploaded, it stayed zero - the fast-travel dissolve without its noise.
 void vk_tex_upload_for_mips(NvnTexture *t) {
-    TexBackend *b = t->backend;
+    TexBackend *b = (TexBackend *)t->backend;
     if (b && (b->gpu_owned || b->uploaded)) return;
     static int nlog;
     if (nlog++ < 8) LOG("[vk] %ux%ux%u (nvn %#x) first drawn into at a level past 0: its CPU contents uploaded first\n",
