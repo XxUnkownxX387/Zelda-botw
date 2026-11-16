@@ -375,11 +375,7 @@ bool framegen_should_generate(void) {
 void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkFormat target_fmt, VkExtent2D extent) {
     if (!framegen_should_generate()) return;
 
-    // Check if all required resources are available
-    if (!fg_pipeline_valid) {
-        LOG("[framegen] pipeline not ready, skipping generation\n");
-        return;
-    }
+    // Check if all required resources are available (except pipeline - we'll create it if needed)
     if (!fg_prev_color_view) {
         LOG("[framegen] missing color view, skipping generation\n");
         return;
@@ -400,10 +396,6 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
         LOG("[framegen] previous frame images not available, skipping generation\n");
         return;
     }
-    if (!fg_pipeline_valid) {
-        LOG("[framegen] pipeline not valid, skipping generation\n");
-        return;
-    }
     if (!g_vk.dyn_render) {
         LOG("[framegen] dynamic rendering not available, skipping generation\n");
         return;
@@ -413,13 +405,14 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
         return;
     }
 
-    LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
-
+    // Ensure pipeline is created (creates it on first call)
     framegen_ensure_pipeline();
     if (!fg_pipeline_valid) {
         LOG("[framegen] pipeline creation failed, skipping generation\n");
         return;
     }
+
+    LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
 
     // Update uniform buffer with VP matrices
     struct { float prev_vp[4][4]; float curr_vp[4][4]; float gen_vp[4][4]; float extent[2]; } *ub_data;
