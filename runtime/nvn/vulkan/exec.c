@@ -1894,10 +1894,7 @@ static void vk_end_pass_at(int line) {
     vk_end_rendering(vk_cmd());
     
     // Framegen: capture main scene pass (G-buffer) depth/color for warp
-    extern bool framegen_enabled(void);
     extern bool framepace_gen_doubled(void);
-    extern void framegen_store_prev_frame(VkCommandBuffer, VkImage, VkImageView, VkFormat,
-                                           VkImage, VkImageView, VkFormat, VkExtent2D, const float[4][4]);
     if (framegen_enabled() && framepace_gen_doubled()) {
         // Main scene pass: 3+ color attachments + depth (G-buffer)
         if (st.rt.depth && st.rt.ncolor >= 3 && st.rt.color[0]) {
@@ -1927,7 +1924,6 @@ static void vk_end_pass_at(int line) {
             }
             
             // Get current VP from framegen camera
-            extern void framegen_get_current_vp(float out[4][4]);
             float curr_vp[4][4];
             framegen_get_current_vp(curr_vp);
             VkExtent2D extent = {st.rt.color[0] ? st.rt.color[0]->width : 0, st.rt.color[0] ? st.rt.color[0]->height : 0};
@@ -6897,7 +6893,6 @@ static void draw_(CmdRec *r, bool indexed) {
         if (last_hash) widescreen_backdrop_seen(last_hash);
         extern void widescreen_scene_ubo(const float *u, uint64_t size);  // (the camera's view-projection)
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
-        extern void framegen_camera(const float *u, uint64_t size);  // (the framegen's camera: the scene G-buffer's UBO)
         if (st.ubuf[0][5].addr) framegen_camera((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
     }
     if (g_debug_frame) debug_draw(pr, r, indexed);

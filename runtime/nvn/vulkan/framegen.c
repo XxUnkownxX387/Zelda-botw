@@ -68,6 +68,15 @@ void framegen_camera(const float *u, uint64_t size) {
 
 void framegen_link(const float *p, uint64_t size) { (void)p; (void)size; }  // (the player's position: not yet read)
 
+// Get current camera view-projection matrix (for storing with the frame)
+void framegen_get_current_vp(float out[4][4]) {
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            out[r][c] = g_framegen_cam.vp[r][c];
+        }
+    }
+}
+
 bool framegen_enabled(void) { 
     static int logged = -1;
     if (logged < 0) {
@@ -422,7 +431,6 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
     }
 
     memcpy(ub_data->prev_vp, fg_prev_vp, sizeof fg_prev_vp);
-    extern void framegen_get_current_vp(float out[4][4]);
     framegen_get_current_vp(ub_data->curr_vp);
     memcpy(ub_data->gen_vp, fg_gen_vp, sizeof fg_gen_vp);
     ub_data->extent[0] = (float)fg_extent.width;

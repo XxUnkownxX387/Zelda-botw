@@ -16,6 +16,7 @@
 #include "../../settings.h"
 #include "../../ui/menu.h"
 #include "vk.h"
+#include "framegen.h"
 #include "timing_trace.h"
 #include "device_compat.h"
 #include "../output_scale.h"
@@ -1585,8 +1586,6 @@ void backend_present(NvnTexture *t) {
         bool shot = win_shot && (long)total_frames + 1 == win_shot;
 
         // Framegen: if we should generate a frame, render the warp instead of ending the frame
-        extern bool framegen_should_generate(void);
-        extern void framegen_present_generated(VkCommandBuffer, VkImageView, VkFormat, VkExtent2D);
         if (framegen_should_generate()) {
             static const VkComponentMapping id = {0};
             VkImageView color_view = vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, b->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);

@@ -16,8 +16,9 @@ bool framegen_enabled(void);
 bool framegen_generate(void);  // (the last real frame was composited: build the intermediate to present next)
 
 // Integration with present path
-void framegen_after_real_frame(VkCommandBuffer cb, VkImageView color_view, VkFormat color_fmt,
-                                VkImageView depth_view, VkFormat depth_fmt, VkExtent2D extent);
+void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageView color_view, VkFormat color_fmt,
+                                VkImage depth_image, VkImageView depth_view, VkFormat depth_fmt,
+                                VkExtent2D extent, const float vp[4][4]);
 bool framegen_should_generate(void);
 void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkFormat target_fmt, VkExtent2D extent);
 void framegen_get_current_vp(float out[4][4]);
