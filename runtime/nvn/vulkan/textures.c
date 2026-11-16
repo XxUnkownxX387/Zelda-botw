@@ -361,7 +361,6 @@ static void bc_decode(VkFormat bc, const uint8_t *blocks, uint32_t wb, uint32_t 
             }
         }
     }
-}
 #endif
 // ================================================================== output resolution / per-frame clears
 // Render targets are allocated at one of two scales (runtime/nvn/output_scale.c sets both every presented frame;
