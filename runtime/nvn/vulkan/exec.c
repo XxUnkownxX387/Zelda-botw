@@ -4733,10 +4733,8 @@ bool vk_heap_place(uint64_t size) {
     VkBuffer buf;
     VkMemoryRequirements mr;
     int type;
-    const VkMemoryPropertyFlags need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    int dma_buf_failed = 0;  // track if dma-buf path failed for Mali fallback
-    // Query external buffer properties ONCE per handle type to find compatible memory types.
-    // This avoids creating buffers that the driver can't back with the requested external handle type.
+    const VkMemoryPropertyFlags need_coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    // Query external buffer properties per handle type to find compatible memory types.
     VkPhysicalDeviceExternalBufferInfo ext_info = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO,
                                                    .handleType = ht, .usage = bi.usage};
     VkExternalBufferProperties ext_props = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
@@ -4744,12 +4742,25 @@ bool vk_heap_place(uint64_t size) {
     // The driver tells us which memory types support this external handle type.
     // Intersect with the buffer's memory type bits after creation.
     for (;;) {
+        // Check if the driver actually supports exporting this handle type
+        VkExternalMemoryFeatureFlags features = 0;
+        if (ext_props.externalMemoryProperties.compatibleHandleTypes & ht) {
+            features = ext_props.externalMemoryProperties.externalMemoryFeatures;
+        }
+        if (!(features & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT)) {
+            LOG("[vk] heap placement: driver cannot export handle type 0x%x, trying fallback\n", ht);
+            if (memfd && g_vk.mem_dmabuf && ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) {
+                ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+                ext_info.handleType = ht;
+                vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
+                continue;
+            }
+            return NOT_PLACED();
+        }
+
         ebi.handleTypes = ht;
         VkResult cr = vkCreateBuffer(g_vk.dev, &bi, NULL, &buf);
         if (cr != VK_SUCCESS) {
-            // Said, not silent: on the Mali-G720 / G78 / G68 the setting was on and the heap went back to CPU copies
-            // with no line (#264 #277 #256 #268) - the buffer refused, the only quiet way out. The driver's limits
-            // with it; an opaque file refused tries a dma-buf.
             VkPhysicalDeviceMaintenance4Properties m4 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES};
             VkPhysicalDeviceMaintenance3Properties m3 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES, .pNext = &m4};
             VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &m3};
@@ -4760,7 +4771,6 @@ bool vk_heap_place(uint64_t size) {
                 (unsigned long long)(m4.maxBufferSize >> 20), (unsigned long long)(m3.maxMemoryAllocationSize >> 20));
             if (memfd && g_vk.mem_dmabuf && ht != VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
                 ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-                // Re-query external buffer properties for the new handle type
                 ext_info.handleType = ht;
                 vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
                 continue;
@@ -4785,26 +4795,22 @@ bool vk_heap_place(uint64_t size) {
         }
         if (type < 0) {
             if (heap_debug) LOG("[vk] Mali: no host-visible+coherent memory type available (types 0x%x)\n", mr.memoryTypeBits);
+            vkDestroyBuffer(g_vk.dev, buf, NULL);
+            // If we're on opaque fd and dma-buf is available, try dma-buf
+            if (memfd && g_vk.mem_dmabuf && ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) {
+                LOG("[vk] Mali: opaque fd offers no host-visible+coherent type (types 0x%x) - trying dma-buf\n",
+                    mr.memoryTypeBits);
+                ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+                ext_info.handleType = ht;
+                vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
+                continue;
+            }
+            // On dma-buf, or memfd off: no fallback, give up
             return NOT_PLACED();
         }
         if (heap_debug) LOG("[vk] Mali memfd: selected memory type %d\n", type);
-        // For Mali on dma-buf: if no host-visible type found, the mmap at HEAP_BASE will fail.
-        // Don't proceed with invalid type - try opaque fd instead, or AHardwareBuffer.
-        if (type < 0 && memfd && g_vk.mem_dmabuf && ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
-            LOG("[vk] Mali: dma-buf offers no host-visible memory type (types 0x%x) - trying opaque fd\n",
-                mr.memoryTypeBits);
-            vkDestroyBuffer(g_vk.dev, buf, NULL);
-            ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
-            dma_buf_failed = 1;
-            continue;
-        }
-        if (type >= 0 || !memfd || !g_vk.mem_dmabuf || ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) break;
-        LOG("[vk] game memory through a shared file: the opaque file takes memory types 0x%x, none the CPU can use - "
-            "trying a dma-buf\n", mr.memoryTypeBits);
-        vkDestroyBuffer(g_vk.dev, buf, NULL);
-        ht = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-        ext_info.handleType = ht;
-        vkGetPhysicalDeviceExternalBufferProperties(g_vk.phys, &ext_info, &ext_props);
+        // Successfully found a suitable memory type
+        break;
     }
     {   // LARECOMP_VK_MEMFD_TYPE=<n> (a test): the exported file's memory type - which one a driver gives a map the CPU
         // runs fast in and the GPU sees, memfd_probe.c tells
