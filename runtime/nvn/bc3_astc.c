@@ -4,6 +4,7 @@
 // BC5 (two channels) -> ASTC 4x4 luminance+alpha (CEM 4)
 #include "bc3_astc.h"
 #include "bc1_astc.h"  // for Bits, put(), put_weights(), trits_init(), etc.
+#define BCDEC_IMPLEMENTATION
 #include "bcdec.h"  // for bcdec_bc3, bcdec_bc4, bcdec_bc5
 #include <stdbool.h>
 #include <pthread.h>
