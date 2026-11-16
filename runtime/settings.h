@@ -77,6 +77,8 @@ typedef struct {
                           // can't place it (Mali, Xclipse; experimental): vulkan/exec.c vk_heap_place, at the game's start
     char driver_env[256]; // the driver's own switches, NAME=value separated by spaces (Turnip's FD_DEV_FEATURES, TU_DEBUG;
                           // #227): set when the app starts, before the driver loads (vulkan/device.c)
+    int max_gpu_mem_mb;   // VRAM budget for textures+ring+buffer cache (0 = no limit; Mali: 1024 recommended). When exceeded,
+                          // least-recently-used non-render-target textures are evicted (vulkan/textures.c). Read once at start.
 #define TOUCH_NCTL 19  // (ui/touch_controls.mm: LAS's 12, then the right stick, L3 / R3 and the d-pad)
     float touch_pos[TOUCH_NCTL][2];  // each on-screen control's place, a share of the screen (negative: default)
     // The icon layout (ui/touch_controls.mm), in the world only - the classic one above stays in the game's menus:

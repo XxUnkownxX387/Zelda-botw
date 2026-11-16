@@ -134,6 +134,8 @@ typedef struct TexBackend {
     int tp;              // runtime/nvn/texpatch.c: 0 not checked yet, -1 none, else known UI texture + 1
     uint32_t tp_gen;     // texpatch_generation() it was last uploaded with
     int reg;  // slot in textures.c's live list + 1 (a reboot destroys them all)
+    uint64_t last_used_frame;  // VRAM budget LRU: frame when this texture was last accessed
+    uint64_t mem_size;         // VRAM budget: GPU memory size of this texture (bytes)
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)

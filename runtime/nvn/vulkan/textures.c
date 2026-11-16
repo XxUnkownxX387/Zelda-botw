@@ -11,6 +11,63 @@
 #include "../astc.h"
 #include "../renderer.h"
 #include "../texpatch.h"
+#include "../../settings.h"  // g_settings.max_gpu_mem_mb
+
+// ================================================================== VRAM budget (LRU eviction)
+static uint64_t g_vram_used_bytes = 0;
+static uint64_t g_vram_budget_bytes = 0;
+
+static void vram_budget_init(void) {
+    if (g_vram_budget_bytes == 0 && g_settings.max_gpu_mem_mb > 0) {
+        g_vram_budget_bytes = (uint64_t)g_settings.max_gpu_mem_mb * 1024 * 1024;
+        LOG("[vk] VRAM budget: %d MB\n", g_settings.max_gpu_mem_mb);
+    }
+}
+
+static void vram_budget_add(uint64_t size) {
+    if (g_vram_budget_bytes == 0) return;
+    g_vram_used_bytes += size;
+}
+
+static void vram_budget_remove(uint64_t size) {
+    if (g_vram_budget_bytes == 0) return;
+    if (g_vram_used_bytes >= size) g_vram_used_bytes -= size;
+    else g_vram_used_bytes = 0;
+}
+
+static void vram_budget_maybe_evict(uint64_t current_frame) {
+    if (g_vram_budget_bytes == 0 || g_vram_used_bytes <= g_vram_budget_bytes) return;
+
+    extern uint64_t renderer_present_count(void);
+    uint64_t frame = renderer_present_count();
+    if (frame == current_frame) return;  // already processed this frame
+
+    // Find LRU non-render-target texture to evict
+    extern NvnTexture **g_live;
+    extern int g_nlive;
+    NvnTexture *victim = NULL;
+    uint64_t oldest = UINT64_MAX;
+    for (int i = 0; i < g_nlive; i++) {
+        NvnTexture *t = g_live[i];
+        TexBackend *b = t ? t->backend : NULL;
+        if (!b) continue;
+        // Skip render targets (rs_group != RS_NONE) and recently used (last 2 frames)
+        if (b->rs_group != RS_NONE) continue;
+        if (b->last_used_frame > frame - 2) continue;
+        if (b->last_used_frame < oldest) {
+            oldest = b->last_used_frame;
+            victim = t;
+        }
+    }
+    if (victim) {
+        LOG("[vk] VRAM budget exceeded (%llu MB > %d MB): evicting texture %p (last used frame %llu, %llu MB)\n",
+            (unsigned long long)(g_vram_used_bytes >> 20), g_settings.max_gpu_mem_mb,
+            (void *)victim, (unsigned long long)oldest,
+            (unsigned long long)(victim->backend ? victim->backend->mem_size >> 20 : 0));
+        extern void backend_texture_destroyed(NvnTexture *t);
+        backend_texture_destroyed(victim);
+    }
+}
 
 // ================================================================== formats
 typedef struct { VkFormat vf; uint8_t expand_rgb, alpha_one; } VkFmt;
@@ -549,6 +606,14 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
         depthfmt = false;
     }
+    // VRAM budget: get allocation size and track it
+    VmaAllocationInfo alloc_info;
+    vmaGetAllocationInfo(g_vk.vma, b->mem, &alloc_info);
+    b->mem_size = alloc_info.size;
+    vram_budget_add(b->mem_size);
+    vram_budget_init();
+    vram_budget_maybe_evict(renderer_present_count());
+
     b->format = vf;
     b->width = tw; b->height = th; b->depth = depth; b->layers = layers; b->levels = levels; b->samples = samples;
     b->aspect = depthfmt ? aspect_of(t->format) : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -636,9 +701,14 @@ static void destroy_image(TexBackend *b) {
     bc_shadow_destroy(b);
 #endif
     views_forget(b);
-    if (b->image || b->mem) defer((Dead){.img = b->image, .mem = b->mem});  // (never the same allocation twice)
+    if (b->image || b->mem) {
+        // VRAM budget: remove from tracking before deferring
+        if (b->mem_size > 0) vram_budget_remove(b->mem_size);
+        defer((Dead){.img = b->image, .mem = b->mem});  // (never the same allocation twice)
+    }
     b->image = VK_NULL_HANDLE;
     b->mem = VK_NULL_HANDLE;
+    b->mem_size = 0;
 }
 
 // Live game textures: an in-place reboot (vk_textures_reset) destroys them all.
@@ -1114,6 +1184,8 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     TexBackend *b = tex_backend(t);
+    extern uint64_t renderer_present_count(void);
+    b->last_used_frame = renderer_present_count();  // VRAM budget LRU
     if (b->pending_rgba) upload_pending(b);
     if (for_render && !b->gpu_owned && t->addr) {  // (LARECOMP_LOG_STALE_UPLOAD: textures uploaded before, over it)
         static int on = -1, n;
