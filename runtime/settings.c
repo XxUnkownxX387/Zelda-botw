@@ -59,7 +59,8 @@ Settings g_settings = {
     .framegen = false,  // (the frame generation: the frames between two real ones are generated, the chosen rate doubled -
                         // vulkan/framegen.c; off: the frames are the real ones)
     .thermal_cap = true,  // (30 fps while phone overheats)
-    .shader_parallel = true,  // (the experimental parallel shader-stage compile: Mali - the Mali-G720 - defaults it on)
+    .shader_parallel = false,  // (experimental: parallel shader-stage compile; auto-enabled for Mali/Immortalis)
+    .shader_threads = 0,       // Shader compiler worker threads: 0 = automatic (clamp(cores-4, 2, 4)), 1..6 = fixed
     .res_mode = 1,  // (1x: the Switch's 900p scene, the HUD at the screen's resolution - Match display drew the scene at
                     // 2560x1440 on the POCO F7 Ultra: 22 fps)
     .low_ram = -1,  // (auto: on for devices up to 4 GB)
@@ -286,6 +287,7 @@ void settings_load(void) {
         else if (!strcmp(key, "thermal_cap")) g_settings.thermal_cap = atoi(val) != 0;
         else if (!strcmp(key, "shader_int32")) g_settings.shader_int32 = atoi(val) != 0;
         else if (!strcmp(key, "shader_parallel")) g_settings.shader_parallel = atoi(val) != 0;
+        else if (!strcmp(key, "shader_threads")) g_settings.shader_threads = atoi(val);
         else if (!strcmp(key, "sync_lag")) g_settings.sync_lag = atoi(val) != 0;
         else if (!strcmp(key, "native_code")) g_settings.native_code = atoi(val) != 0;
         else if (!strcmp(key, "files_in_place")) g_settings.files_in_place = atoi(val) != 0;
@@ -375,6 +377,12 @@ void settings_load(void) {
     fclose(f);
     if (!tip_key) g_settings.menu_tip_seen = true;  // (a settings file from before the note: not a first launch)
     if (!aspect_key) g_settings.aspect_asked = true;  // (likewise: the aspect ratio was chosen already)
+    // Auto-enable shader_parallel for Mali/Immortalis if not explicitly set in ini
+    if (!tip_key) {  // tip_key reused as "shader_parallel was in ini"
+        if (strstr(g_settings.gpu_model, "Mali") || strstr(g_settings.gpu_model, "Immortalis")) {
+            g_settings.shader_parallel = true;
+        }
+    }
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
@@ -406,6 +414,7 @@ void settings_save(void) {
     fprintf(f, "shader_int32 = %d\nsync_lag = %d\nnative_code = %d\nfiles_in_place = %d\n", g_settings.shader_int32,
             g_settings.sync_lag, g_settings.native_code, g_settings.files_in_place);
     fprintf(f, "shader_parallel = %d\n", g_settings.shader_parallel);
+    fprintf(f, "shader_threads = %d\n", g_settings.shader_threads);
     static const char *const tri[] = {"auto", "0", "1"};  // (-1 / 0 / 1)
 #define TRI(v) tri[(v) < 0 ? 0 : (v) ? 2 : 1]
     fprintf(f, "gpu_heap = %s\ninplace_reads = %s\nturnip_lrz = %s\nlog_file = %d\ngpu_model = %s\n", TRI(g_settings.gpu_heap),

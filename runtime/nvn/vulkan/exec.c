@@ -1197,6 +1197,10 @@ static pthread_cond_t jobs_cond = PTHREAD_COND_INITIALIZER;
 
 static void *worker(void *a) {
     (void)a;
+    #ifdef __ANDROID__
+    pthread_setname_np(pthread_self(), "shader-worker");
+    setpriority(PRIO_PROCESS, gettid(), 10);
+    #endif
     for (;;) {
         pthread_mutex_lock(&jobs_lock);
         while (!jobs_head) pthread_cond_wait(&jobs_cond, &jobs_lock);
@@ -1224,6 +1228,10 @@ static pthread_mutex_t tjobs_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t tjobs_cond = PTHREAD_COND_INITIALIZER;
 static void *translator(void *a) {
     (void)a;
+    #ifdef __ANDROID__
+    pthread_setname_np(pthread_self(), "shader-translator");
+    setpriority(PRIO_PROCESS, gettid(), 10);
+    #endif
     for (;;) {
         pthread_mutex_lock(&tjobs_lock);
         while (!tjobs_head) pthread_cond_wait(&tjobs_cond, &tjobs_lock);
@@ -1259,13 +1267,15 @@ static void run_job(void (*fn)(void *), void *arg) {
         int cores = SDL_GetNumLogicalCPUCores();
         int n = cores - 4;
 #ifdef __ANDROID__
-        n = cores / 2;
+        n = (cores > 6) ? (cores - 4) : 2;
+        if (n < 2) n = 2;
         if (n > 4) n = 4;  // leave CPU capacity for the game and Vulkan translation
-        if (g_vk.props.vendorID == 0x13B5) n = 8;  // Mali (ARM, Mali-G720): its stage compiles are long - more workers
-                                   // for the bursts of first-time pipelines (an area entry: dozens of compiles at once)
-#endif
+        // Env override
         const char *workers = getenv("LARECOMP_SHADER_WORKERS");
         if (workers) n = atoi(workers);
+        // Setting override (0 = auto, 1..6)
+        if (g_settings.shader_threads > 0) n = g_settings.shader_threads;
+#endif
         if (n < 1) n = 1;
         if (n > 16) n = 16;
         for (int i = 0; i < n; i++) { pthread_t t; pthread_create(&t, NULL, worker, NULL); }
@@ -2667,11 +2677,9 @@ static void compile_program(void *arg) {
     bool par = g_settings.shader_parallel;
     {   // (experimental LARECOMP_SHADER_PARALLEL=<n>: the fragment shader's SPIR-V compiles on its own thread while the
         // vertex stage's compiles here - the two stages rarely overlap otherwise, and the first use of a new shader pair
-        // waits on both: a hitch that pushed a frame past the pace's budget was the one that broke the constant 40 fps;
-        // Mali (ARM, this device's Mali-G720: vendor 0x13B5): the same overlap for its compiler - on by default there)
+        // waits on both: a hitch that pushed a frame past the pace's budget was the one that broke the constant 40 fps)
         const char *e = getenv("LARECOMP_SHADER_PARALLEL");
         if (e) par = atoi(e) != 0;
-        else if (g_vk.props.vendorID == 0x13B5) par = true;
     }
     uint64_t t0 = plat_now_ns();
     LOG("[vk] compile vs %llx fs %llx par %d (started)\n", (unsigned long long)p->code[0], (unsigned long long)p->code[1], par);

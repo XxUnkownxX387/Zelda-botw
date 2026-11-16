@@ -1619,8 +1619,22 @@ static void prelaunch_tab(float sc) {
         changed |= ImGui::Checkbox(tr("Shader stages in parallel (experimental)"), &g_settings.shader_parallel);
         ImGui::TextDisabled("%s", tr("The fragment shader's SPIR-V is compiled on its own thread while the vertex stage's "
                                   "compiles here; the first use of a new shader pair waits on both otherwise - a hitch that "
-                                  "pushed a frame past the pace's budget was the one that broke the constant 40 fps. Mali "
-                                  "(ARM): on by default. Applies from the next shader compile."));
+                                  "pushed a frame past the pace's budget was the one that broke the constant 40 fps. "
+                                  "Auto-enabled for Mali/Immortalis GPUs. Applies from the next shader compile."));
+        ImGui::Spacing();
+        ImGui::Text("%s", tr("Shader threads"));
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const char *thread_opts[] = {tr("Auto"), "1", "2", "3", "4", "5", "6"};
+        int thread_idx = g_settings.shader_threads;
+        if (thread_idx < 0) thread_idx = 0;
+        if (thread_idx > 6) thread_idx = 6;
+        changed |= ImGui::Combo("##shader_threads", &thread_idx, thread_opts, 7);
+        if (thread_idx != g_settings.shader_threads) {
+            g_settings.shader_threads = thread_idx;
+            changed = true;
+        }
+        ImGui::TextDisabled("%s", tr("Number of shader compiler worker threads. Auto = clamp(cores-4, 2, 4). "
+                                  "Overrides LARECOMP_SHADER_WORKERS env. Applies on next area entry."));
         ImGui::Spacing();
         ImGui::Text("%s", tr("Driver variables"));  // (#227: g_settings.driver_env, vulkan/device.c)
         ImGui::SetNextItemWidth(-FLT_MIN);
