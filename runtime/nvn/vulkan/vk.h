@@ -179,3 +179,8 @@ VkShaderModule vk_builtin_shader(const char *name);  // internal shaders (clear,
 
 // ---- device / window (device.c)
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);
+
+// A frame's work in ms (the longest of the game's thread, the render thread and the GPU; smoothed), -1 unknown
+double vk_frame_work_ms(void);
+// Low RAM mode (vulkan/exec.c): -1 automatic (devices up to 4 GB), 1 on, 0 off; read once as the app starts
+bool vk_low_ram(void);

@@ -23,6 +23,7 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/system_properties.h>
 #include <sys/ucontext.h>
 #include <time.h>
 #include <unistd.h>
@@ -93,6 +94,21 @@ static void log_file_begin(FILE *f, const char *root_file) {
         fwrite(g_early, 1, g_early_n, f);
     }
     fflush(f);
+}
+
+// The phone's own vibration motor (BOTWRecompAndroidActivity.vibrateDevice): amplitude 1-255 for ms, 0 stops it.
+// From the SDL thread (hle/input.c input_rumble_apply).
+void plat_vibrate(int amplitude, int ms) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    jobject act = (jobject)SDL_GetAndroidActivity();
+    if (!env || !act) return;
+    jclass c = (*env)->GetObjectClass(env, act);
+    static jmethodID m;
+    if (!m) m = (*env)->GetStaticMethodID(env, c, "vibrateDevice", "(II)V");
+    if (m) (*env)->CallStaticVoidMethod(env, c, m, (jint)amplitude, (jint)ms);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, c);
+    (*env)->DeleteLocalRef(env, act);
 }
 
 void android_log_file(bool on) {
@@ -188,8 +204,22 @@ bool plat_reserve_guest(uint64_t lo, uint64_t hi) {
         }
         g_guest_lo = base;
         fprintf(stderr, "[android] guest window %#llx-%#llx\n", (unsigned long long)base, (unsigned long long)(base + hi - lo));
+        const char *app = getenv("LARECOMP_APP");  // (the activity: version, versionCode, phone, Android)
+        if (app && *app) fprintf(stderr, "BOTWRecompAndroid %s\n", app);
         const char *last = getenv("LARECOMP_LAST_EXIT");  // (the activity: ApplicationExitInfo)
         if (last && *last) fprintf(stderr, "[android] the last run ended: %s\n", last);
+        const char *boot = getenv("LARECOMP_BOOT_STATE");
+        if (boot && *boot) fprintf(stderr, "[android] %s\n", boot);
+        const char *boot_props[] = {"ro.boot.bootreason", "sys.boot.reason"};
+        for (unsigned i = 0; i < sizeof boot_props / sizeof *boot_props; i++) {
+            char value[PROP_VALUE_MAX] = "";
+            if (__system_property_get(boot_props[i], value) > 0)
+                fprintf(stderr, "[android] %s: %s\n", boot_props[i], value);
+        }
+        // The crash report from here on, not only once the game's threads run: a custom driver (RADV on an Xclipse,
+        // #234 #345 #383) crashed in the first frames, before the game loaded, and the log just stopped.
+        // (The handler is process-wide; the game's threads install it again for their own signal stacks.)
+        plat_crash_handler_install();
         return true;
     }
     void *p = mmap((void *)(uintptr_t)lo, hi - lo, PROT_READ | PROT_WRITE,
@@ -722,6 +752,8 @@ JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nati
     g_ds.headroom = headroom;
     g_ds.plugged = plugged;
     pthread_mutex_unlock(&g_ds_lock);
+    extern void framepace_thermal_sample(int thermal, float headroom);  // (hle/framepace.c: 30 fps while too hot)
+    framepace_thermal_sample(thermal, headroom);
     // LARECOMP_LOG_POWER=1 (a test, on battery only: on the charger the current is the charger's): the power draw each
     // second with the CPU clusters' clocks, this process's CPU share and the A/B side (LARECOMP_AB)
     static int log_power = -1;
@@ -737,6 +769,14 @@ JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nati
         LOG("[power] %.2f W battery %.1f C soc %.1f C cpu %.0f%% mhz %s thermal %d headroom %.2f frame %llu ab %d\n", watts,
             batt_temp_c, s.soc_temp_c, s.cpu_pct, mhz, thermal, headroom, (unsigned long long)renderer_present_count(), vk_ab(NULL));
     }
+}
+
+JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeMemoryPressure(
+        JNIEnv *env, jclass cls, jint level, jlong available, jlong total, jlong threshold, jboolean low, jint pss) {
+    (void)env; (void)cls;
+    LOG("[android] memory pressure level %d: available %llu MB / %llu MB, low threshold %llu MB, low %d, process PSS %d MB\n",
+        level, (unsigned long long)available >> 20, (unsigned long long)total >> 20,
+        (unsigned long long)threshold >> 20, low != 0, pss / 1024);
 }
 
 static uint64_t read_u64(const char *path) {

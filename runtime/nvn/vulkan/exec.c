@@ -51,6 +51,39 @@ static uint64_t cum_exec, cum_wait, cum_draws, cum_submits;  // (profiling) neve
 #ifdef __ANDROID__
 uint64_t vk_cum_wait_ns(void) { return cum_wait; }  // (the performance overlay: time spent waiting on the GPU)
 #endif
+
+// A frame's work in ms (the longest of the game's thread, the render thread and the GPU; smoothed), -1 unknown
+static double g_work_ms;
+double vk_frame_work_ms(void) { return g_work_ms > 0 ? g_work_ms : -1; }
+
+// Low RAM mode (vulkan/exec.c): -1 automatic (devices up to 4 GB), 1 on, 0 off; read once as the app starts
+bool vk_low_ram(void) {
+#ifdef __ANDROID__
+    static int v = -2;
+    if (v == -2) {
+        int ram_gb = 0;
+        FILE *f = fopen("/proc/meminfo", "r");
+        if (f) {
+            char line[256];
+            while (fgets(line, sizeof line, f)) {
+                if (strncmp(line, "MemTotal:", 9) == 0) {
+                    long kb = atol(line + 9);
+                    ram_gb = (int)((kb + 524288) / 1048576);  // round to GB
+                    break;
+                }
+            }
+            fclose(f);
+        }
+        v = (ram_gb > 0 && ram_gb <= 4) ? 1 : 0;
+        if (g_settings.low_ram >= 0) v = g_settings.low_ram;  // override by setting
+        LOG("[vk] low RAM mode: %s (device has %d GB, setting %d)\n", v ? "on" : "off", ram_gb, g_settings.low_ram);
+    }
+    return v;
+#else
+    return false;
+#endif
+}
+
 static uint32_t prof_end_line[4096];  // passes ended, by the exec.c line that ended them (0: submit / present)
 uint64_t prof_views_created;  // textures.c vk_image_view cache misses
 uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
@@ -297,8 +330,8 @@ void vk_pace_frame(void) {
     // A failed trial describes the old workload. Reconsider Auto immediately when the user changes resolution
     // or returns from a fixed FPS mode; otherwise its old exponential backoff can keep the new workload at 30
     // for up to 80 seconds. Keep ordinary hitches from restarting trials (and causing repeated oscillation).
-    bool changed = last_mode != g_settings.fps_mode || last_resolution != g_settings.res_mode;
-    last_mode = g_settings.fps_mode;
+    bool changed = last_mode != fps_mode_now() || last_resolution != g_settings.res_mode;
+    last_mode = fps_mode_now();
     last_resolution = g_settings.res_mode;
     if (changed) {
         memset(over, 0, sizeof over);
@@ -306,9 +339,9 @@ void vk_pace_frame(void) {
         avg = 0;
         slow_since = probe_at = 0;
         probe_wait = 10000000000ull;
-        pace_slow = pace_on && (g_settings.fps_mode == 1 || g_settings.fps_mode == 3);
+        pace_slow = pace_on && (fps_mode_now() == 1 || fps_mode_now() == 3);
         last = 0;  // discard the transition frame's timing, including menu time and resource reallocation
-        LOG("[pace] settings changed: fresh %s pacing history\n", g_settings.fps_mode ? "fixed" : "auto");
+        LOG("[pace] settings changed: fresh %s pacing history\n", fps_mode_now() ? "fixed" : "auto");
     }
 #endif
     uint64_t now = plat_now_ns(), w = g_blocked_ns;
@@ -355,11 +388,11 @@ void vk_pace_frame(void) {
         // target, and a phone whose frames weigh near 33 ms then went over it every few frames - each a vsync late, 50
         // ms: 17-20 fps at any quality where 0.2.6 held 30 (Mali-G925, #89; 0.2.9 brought the 33 ms budget)
         extern int framepace_forced(void);
-        bool fixed30 = g_settings.fps_mode == 1 && AB("adpf30") != 1;
+        bool fixed30 = fps_mode_now() == 1 && AB("adpf30") != 1;
         uint64_t budget;
         if (framepace_forced() > 0)  // (the experimental hard pace: its own budget, three quarters of its frame)
             budget = (uint64_t)((1000000000ull / (uint64_t)framepace_forced()) * 3 / 4);
-        else if (g_settings.fps_mode == 3) budget = 37500000ull;  // (Frame rate 20: 20 fps's, three quarters)
+        else if (fps_mode_now() == 3) budget = 37500000ull;  // (Frame rate 20: 20 fps's, three quarters)
         else if ((follow && pace_slow) || fixed30) budget = 25000000ull;
         else budget = 16666667ull;
         static double budget30 = -1;  // (LARECOMP_ADPF30_MS=<ms>, a test: the 30 fps budget instead of 25 ms)
@@ -385,6 +418,11 @@ void vk_pace_frame(void) {
 #endif
 #ifdef __ANDROID__
     if (g_benchmark) benchmark_frame(p / 1e6, busy, game_busy, render_busy, g_pace_gpu_ms);
+    {   // (the frame's work - the game's thread, the render thread, the GPU, the longest - smoothed: framepace.c lets
+        // a slow interval go once the work fits a faster one)
+        double work = busy > g_pace_gpu_ms ? busy : g_pace_gpu_ms;
+        g_work_ms = g_work_ms > 0 ? g_work_ms + (work - g_work_ms) * 0.1 : work;
+    }
 #endif
     static int log = -1;  // LARECOMP_LOG_PACE=1: each frame's period, vsync wait and busy time
     if (log < 0) log = getenv("LARECOMP_LOG_PACE") != NULL;
@@ -450,11 +488,11 @@ void vk_pace_frame(void) {
     // Fixed: the setting (Video > Frame rate), or an experimental hard pace from the environment (LARECOMP_FPS=<n>):
     // the forced rate's own pace, no measuring, no trials - the auto's slow motion can't take a hard pace back.
     extern int framepace_forced(void);
-    if (g_settings.fps_mode || framepace_forced() > 0) {  // (Video: Frame rate 20 / 30 / 40-45 / 60) fixed: no measuring, no trials - LARECOMP_FPS=<n>
+    if (fps_mode_now() || framepace_forced() > 0) {  // (Video: Frame rate 20 / 30 / 40-45 / 60) fixed: no measuring, no trials - LARECOMP_FPS=<n>
         extern int vk_between_fps(void);
-        bool slow = g_settings.fps_mode == 1 || g_settings.fps_mode == 3;
+        bool slow = fps_mode_now() == 1 || fps_mode_now() == 3;
         if (slow != pace_slow)
-            LOG("[pace] frame rate set to %d fps\n", g_settings.fps_mode == 3 ? 20 : slow ? 30 : g_settings.fps_mode == 4 ? vk_between_fps() : 60);
+            LOG("[pace] frame rate set to %d fps\n", fps_mode_now() == 3 ? 20 : slow ? 30 : fps_mode_now() == 4 ? vk_between_fps() : 60);
         pace_slow = slow;
         return;
     }
@@ -521,7 +559,7 @@ static uint64_t pace_end_counter(const uint64_t *start_entry, const uint64_t *en
     static int fast = -1;
     if (fast < 0) fast = getenv("LARECOMP_FAST_COUNTERS") ? atoi(getenv("LARECOMP_FAST_COUNTERS")) : 0;
     // (Frame rate 45 as 60: the game in its 60 fps way)
-    if ((!pace_slow && pace_on > 0 && (fast || g_settings.fps_mode == 2 || g_settings.fps_mode == 4)) || fast == 2) {  // (2: with LARECOMP_PACE=0 too, a test)
+    if ((!pace_slow && pace_on > 0 && (fast || fps_mode_now() == 2 || fps_mode_now() == 4)) || fast == 2) {  // (2: with LARECOMP_PACE=0 too, a test)
         uint64_t max = start_entry[1] + ns_to_gpu_ticks(PACE_FAST_NS);
         return value > max ? max : value;
     }

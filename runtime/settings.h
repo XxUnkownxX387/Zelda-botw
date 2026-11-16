@@ -1,5 +1,8 @@
 // User settings (botwrecompandroid.ini next to the executable's working directory), edited from the in-game menu.
 #pragma once
+// the performance overlay's items (Settings.overlay_items, ui/perf_overlay.mm)
+enum { OVERLAY_FPS = 1, OVERLAY_THROTTLE = 2, OVERLAY_GPU = 4, OVERLAY_CPU = 8, OVERLAY_BATTERY = 16, OVERLAY_MEMORY = 32,
+       OVERLAY_ALL = 63 };
 #include <stdbool.h>
 
 enum { ASPECT_UNLOCKED = 0, ASPECT_ORIGINAL = 1 };
@@ -42,9 +45,13 @@ typedef struct {
 #ifdef __ANDROID__
     bool touch_controls;  // on-screen controls while no controller is connected (ui/touch_controls.mm)
     int overlay_style;    // Show FPS's overlay (ui/perf_overlay.mm): 0 full, 1 compact (one line)
+    int overlay_scale, overlay_opacity;  // its size and opacity, % (40..150, 20..100)
+    int overlay_items;    // OVERLAY_* bits: what it shows (all by default)
     float overlay_pos[2]; // its top left, a share of the screen, dragged there with a finger (negative: the corner)
     bool event_fps_unlock;  // in-game cutscenes and talks at the chosen frame rate, not 30 (hle/framepace.c)
     int fps_mode;         // 0: the game's own choice (30 / 60, the frame pacer), 1: 30 fps, 2: 60 fps, 3: 20 fps, 4: 45 fps
+                          // (what runs: fps_mode_now - 30 while the phone overheats, thermal_cap)
+    bool thermal_cap;     // Android: 60 (or 40 / 45) fps drop to 30 while Android says the phone is too hot (hle/framepace.c)
     bool framegen;        // Android: the frame generation (Video > Frame generation, vulkan/framegen.c): the frames the
                           // player sees are generated between two real ones - the real frames keep the rate they have, the
                           // generated ones are the ones doubled (off: the frames are the real ones, the chosen rate)
@@ -52,6 +59,10 @@ typedef struct {
     bool native_code;     // Android: the game's own code on the CPU, no build of it (runtime/native.c); off by default
     bool files_in_place;  // Android: a setup reads the picked romfs/ where it is, no copy (services/fs.c); off by default
     bool sync_lag;        // Android: the game's next frame overlaps the GPU's last (nvn/objects.c nvnSyncWait); on by default
+    int low_ram;          // RAM saving (vulkan/exec.c vk_low_ram): -1 automatic (devices up to 4 GB), 1 on, 0 off; read once,
+                          // as the app starts
+    int vibration;        // a controller's rumble from the game's vibration (hle/input.c), % (0: off; 100 by default)
+    bool vibration_phone; // the phone's own motor where no controller has one (hle/input.c; off by default)
     // Driver compatibility (the start screen's Settings > Prelaunch, ui/launcher.mm; from LASRecompAndroid), for GPUs
     // where a Turnip path draws wrong: read when the game starts (gpu_heap, inplace_reads) or when the app starts
     // (turnip_lrz, log_file). -1 Automatic: on for the Adreno 8xx GPUs these paths were made on, off elsewhere
@@ -93,6 +104,11 @@ typedef struct {
 } Settings;
 
 extern Settings g_settings;
+
+// The frame rate mode in effect (hle/framepace.c): g_settings.fps_mode, or 1 (30 fps) while the thermal cap holds a
+// 60 or 40 / 45 fps mode down. What the pacer, the swap interval and the resolution go by; the menus show the setting.
+int fps_mode_now(void);
+void framepace_thermal_sample(int thermal, float headroom);  // (once a second, from the activity: platform/android.c)
 
 void settings_load(void);
 void settings_save(void);
