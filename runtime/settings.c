@@ -74,7 +74,7 @@ Settings g_settings = {
     .sync_lag = true,           // (a few more fps; the CPU's reads of GPU results a frame old: nvn/objects.c nvnSyncWait)
     .out_lines = OUT_AUTO,      // (POCO F7 Ultra, 3200x1440, 1.8.2's Great Plateau: GPU 22.8 ms a frame at the screen's,
                                 // 18.6 at 1080 lines with a larger scene - the final image's passes over 2.2x the pixels)
-    .max_gpu_mem_mb = 0,        // (0 = no VRAM limit; Mali: 1024 recommended to avoid Android OOM kills)
+    .max_gpu_mem_mb = 1024,     // (0 = no VRAM limit; Mali: 1024 recommended to avoid Android OOM kills)
 #else
     .upscaler = UPSCALE_SHARP,  // (MetalFX on macOS, AMD FSR 1 on Windows)
 #endif
