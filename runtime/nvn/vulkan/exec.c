@@ -56,34 +56,6 @@ uint64_t vk_cum_wait_ns(void) { return cum_wait; }  // (the performance overlay:
 static double g_work_ms;
 double vk_frame_work_ms(void) { return g_work_ms > 0 ? g_work_ms : -1; }
 
-// Low RAM mode (vulkan/exec.c): -1 automatic (devices up to 4 GB), 1 on, 0 off; read once as the app starts
-bool vk_low_ram(void) {
-#ifdef __ANDROID__
-    static int v = -2;
-    if (v == -2) {
-        int ram_gb = 0;
-        FILE *f = fopen("/proc/meminfo", "r");
-        if (f) {
-            char line[256];
-            while (fgets(line, sizeof line, f)) {
-                if (strncmp(line, "MemTotal:", 9) == 0) {
-                    long kb = atol(line + 9);
-                    ram_gb = (int)((kb + 524288) / 1048576);  // round to GB
-                    break;
-                }
-            }
-            fclose(f);
-        }
-        v = (ram_gb > 0 && ram_gb <= 4) ? 1 : 0;
-        if (g_settings.low_ram >= 0) v = g_settings.low_ram;  // override by setting
-        LOG("[vk] low RAM mode: %s (device has %d GB, setting %d)\n", v ? "on" : "off", ram_gb, g_settings.low_ram);
-    }
-    return v;
-#else
-    return false;
-#endif
-}
-
 static uint32_t prof_end_line[4096];  // passes ended, by the exec.c line that ended them (0: submit / present)
 uint64_t prof_views_created;  // textures.c vk_image_view cache misses
 uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
@@ -1037,8 +1009,15 @@ bool vk_low_ram(void) {
             if (fscanf(f, "MemTotal: %ld kB", &total_kb) != 1) total_kb = 0;
             fclose(f);
         }
-        low = e ? atoi(e) != 0 : total_kb && total_kb < 4L * 1024 * 1024;
-        if (low) LOG("[vk] low on RAM (%ld MB): smaller buffers\n", total_kb >> 10);
+        // Priority: LARECOMP_LOW_RAM env > g_settings.low_ram setting > auto-detect (< 4 GB)
+        if (e) {
+            low = atoi(e) != 0;
+        } else if (g_settings.low_ram >= 0) {
+            low = g_settings.low_ram;
+        } else {
+            low = total_kb && total_kb < 4L * 1024 * 1024;
+        }
+        if (low) LOG("[vk] low RAM mode: %s (device has %ld MB, env/setting %d)\n", "on", total_kb >> 10, low);
     }
     return low;
 }
