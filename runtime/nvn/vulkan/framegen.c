@@ -156,9 +156,15 @@ void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageV
 static void framegen_ensure_pipeline(void) {
     if (fg_pipeline_valid) return;
 
+    LOG("[framegen] creating pipeline...\n");
+
     // Check if dynamic rendering is available (required for framegen)
     if (!g_vk.dyn_render) {
         LOG("[framegen] dynamic rendering not available, disabling framegen\n");
+        return;
+    }
+    if (!g_vk.eds) {
+        LOG("[framegen] extended dynamic state not available, disabling framegen\n");
         return;
     }
 
@@ -189,6 +195,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
+    LOG("[framegen] pipeline layout created\n");
 
     // Descriptor pool
     VkDescriptorPoolSize pool_sizes[2] = {
@@ -206,6 +213,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
+    LOG("[framegen] descriptor pool created\n");
 
     // Allocate descriptor set
     VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -222,6 +230,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
+    LOG("[framegen] descriptor set allocated\n");
 
     // Shader modules
     size_t nv, nf;
@@ -269,7 +278,7 @@ static void framegen_ensure_pipeline(void) {
     free(sf);
 
     if (!vs || !fs) {
-        LOG("[framegen] failed to create shader modules\n");
+        LOG("[framegen] failed to create shader modules (vs=%p fs=%p)\n", (void*)vs, (void*)fs);
         vkFreeDescriptorSets(g_vk.dev, fg_desc_pool, 1, &fg_desc_set);
         vkDestroyDescriptorPool(g_vk.dev, fg_desc_pool, NULL);
         vkDestroyPipelineLayout(g_vk.dev, fg_pipeline_layout, NULL);
@@ -279,6 +288,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
+    LOG("[framegen] shader modules created\n");
 
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
@@ -313,6 +323,7 @@ static void framegen_ensure_pipeline(void) {
                                        .pMultisampleState = &ms, .pColorBlendState = &cb_info,
                                        .pDynamicState = &ds, .layout = fg_pipeline_layout,
                                        .renderPass = VK_NULL_HANDLE, .subpass = 0};
+    LOG("[framegen] creating graphics pipeline...\n");
     res = vkCreateGraphicsPipelines(g_vk.dev, VK_NULL_HANDLE, 1, &gp, NULL, &fg_pipeline);
     if (res != VK_SUCCESS) {
         LOG("[framegen] failed to create graphics pipeline: %d\n", res);
@@ -327,6 +338,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
+    LOG("[framegen] graphics pipeline created\n");
 
     vkDestroyShaderModule(g_vk.dev, vs, NULL);
     vkDestroyShaderModule(g_vk.dev, fs, NULL);
