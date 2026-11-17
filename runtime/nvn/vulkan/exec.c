@@ -70,9 +70,9 @@ static void pipe_evict(void);  // (graphics pipelines: below)
 static _Atomic uint64_t stat_skipped_building;  // (never zeroed; hle/benchmark.c) draws skipped: their pipeline is still compiling
 
 // Pipeline warm-up
-static void warmup_init(void);
-static void warmup_process_if_idle(void);
-static void warmup_save_on_background(void);
+void warmup_init(void);
+void warmup_process_if_idle(void);
+void warmup_save_on_background(void);
 static uint64_t op_counts[CMD_COUNT];
 bool g_debug_frame;
 static char stats_text[2048];
