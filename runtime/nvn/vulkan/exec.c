@@ -3377,6 +3377,16 @@ void warmup_add_key(const PipeKey *key, uint64_t vs_hash, uint64_t fs_hash) {
     
     pthread_mutex_lock(&warmup_lock);
     
+    // Ensure warmup list is allocated (warmup_init may have failed)
+    if (!g_warmup_keys) {
+        g_warmup_keys = calloc(WARMUP_MAX_KEYS, WARMUP_KEY_SIZE);
+        if (!g_warmup_keys) {
+            LOG("[warmup] ERROR: failed to allocate warmup list in add_key\n");
+            pthread_mutex_unlock(&warmup_lock);
+            return;
+        }
+    }
+    
     // Check if already in list (by vs_hash + fs_hash)
     for (int i = 0; i < g_warmup_count; i++) {
         if (g_warmup_keys[i].vs_hash == vs_hash && g_warmup_keys[i].fs_hash == fs_hash) {
@@ -3547,7 +3557,16 @@ void warmup_process_if_idle(void) {
 // Called at startup to load the warm-up cache
 void warmup_init(void) {
     if (!g_settings.prewarm) return;
-    warmup_load();
+    // Allocate empty warmup list so warmup_add_key works even if load fails (first run)
+    pthread_mutex_lock(&warmup_lock);
+    if (!g_warmup_keys) {
+        g_warmup_keys = calloc(WARMUP_MAX_KEYS, WARMUP_KEY_SIZE);
+        if (!g_warmup_keys) {
+            LOG("[warmup] ERROR: failed to allocate warmup list\n");
+        }
+    }
+    pthread_mutex_unlock(&warmup_lock);
+    warmup_load();  // may overwrite with cached keys
 }
 
 // Called on background/background to save the warm-up cache
