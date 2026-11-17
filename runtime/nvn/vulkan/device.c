@@ -3,6 +3,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -537,7 +538,7 @@ static void create_device(void) {
     // reported to LASRecomp-Android-Plus; LAS Recomp for Android 4a8749f turned it off on every GPU). Here only on
     // Xclipse: without it BOTW's heap goes through CPU copies (~4 GB every 2 s), and Mali drivers may take it.
     // LARECOMP_VK_HOST_IMPORT=0 / 1: off / on on any GPU.
-    // Mali (ARM, vendor 0x13B5) whose driver offers the import (r54p1 and later): with it and the global-memory arena
+    // Mali (ARM, vendor 0x13B5) whose driver offers the import: with it and the global-memory arena
     // (exec.c gres_init) the game's text went missing from every menu and the title art had grey blocks (Mali-G2-Ultra
     // r56p0, issue #44; Mali-G1-Ultra r54p1, #121 - both reporters' own tests, all there with both off), and the 3 GB
     // heap imported at once got the app killed for memory and froze Android (Mali-G610 r56p0, #118). Both off on those
@@ -546,21 +547,74 @@ static void create_device(void) {
     // Off (gpu_heap 0) also leaves the import off on any driver but Turnip (whose Off is the placed heap's alone).
     // For Mali-G720 (this log: r49p1) the placed-map path fails (VK_ERROR_OUT_OF_DEVICE_MEMORY on map at HEAP_BASE),
     // but the host import (VK_EXT_external_memory_host) works and avoids CPU copies of ~850 MB/frame.
+    // Auto gating: on for Mali GPU generation >= 710, driver version < r54, RAM >= 11 GB.
     bool mali = g_vk.props.vendorID == 0x13B5;
+    bool xclipse = strstr(g_vk.props.deviceName, "Xclipse") || g_vk.props.vendorID == 0x144D;  // (Samsung)
+    bool by_setting = g_settings.gpu_heap == 0 && !vk_driver_is_turnip();
     if (g_vk.host_import) {
         const char *e = getenv("LARECOMP_VK_HOST_IMPORT");
-        bool xclipse = strstr(g_vk.props.deviceName, "Xclipse") || g_vk.props.vendorID == 0x144D;  // (Samsung)
-        bool by_setting = g_settings.gpu_heap == 0 && !vk_driver_is_turnip();
-        // Don't auto-disable for Mali: let the host import path be tried (exec.c vk_heap_place will use it).
-        // LARECOMP_VK_HOST_IMPORT=0 still forces off; LARECOMP_VK_NO_GRES=1 disables the GRES arena.
-        if (mali && !e) {
-            // Mali: try host import (it avoids the placed-map failure at HEAP_BASE).
-            // The old issues (#44 #118 #121) were on r54p1+ Mali-G2/G1/G610; this G720 r49p1 may differ.
-        }
-        if (e ? !atoi(e) : xclipse || by_setting) {
+        // LARECOMP_VK_HOST_IMPORT=0/1 overrides everything
+        if (e) {
+            g_vk.host_import = atoi(e) != 0;
+        } else if (xclipse || by_setting) {
             g_vk.host_import = false;
-            LOG("[vk] guest heap import left off (%s)\n", e ? "LARECOMP_VK_HOST_IMPORT=0" :
-                xclipse ? "Xclipse: its first submission fails" : "settings: game memory on the GPU off");
+        } else if (mali) {
+            // Auto-gate Mali host import based on GPU generation, driver version, and RAM
+            // Parse GPU generation from device name (e.g., "Mali-G720" -> 720)
+            int gpu_gen = 0;
+            const char *gen_str = strstr(g_vk.props.deviceName, "Mali-G");
+            if (gen_str) {
+                gen_str += 6;  // skip "Mali-G"
+                gpu_gen = atoi(gen_str);
+            }
+            // Driver version: props.driverVersion (Vulkan driver version, vendor-specific encoding)
+            // For Mali, typically encoded with major version in upper bits. Try to extract rXX major version.
+            uint32_t dv = g_vk.props.driverVersion;
+            int driver_ver = 0;
+            if (dv >= 10000) {
+                // Likely encoded as major*10000 + minor*100 + patch (e.g., 540100 for r54.1.0)
+                driver_ver = dv / 10000;
+            } else if (dv >= 100) {
+                // Likely encoded as major*100 + minor (e.g., 5401 for r54.1)
+                driver_ver = dv / 100;
+            } else {
+                // Small value, use as-is (e.g., 49 for r49)
+                driver_ver = dv;
+            }
+            // System RAM in GB
+            int total_ram_gb = 0;
+            FILE *meminfo = fopen("/proc/meminfo", "r");
+            if (meminfo) {
+                char line[256];
+                while (fgets(line, sizeof line, meminfo)) {
+                    if (strncmp(line, "MemTotal:", 9) == 0) {
+                        unsigned long kb = 0;
+                        sscanf(line + 9, "%lu", &kb);
+                        total_ram_gb = (int)((kb + 1024 * 1024 - 1) / (1024 * 1024));  // KB to GB, rounded up
+                        break;
+                    }
+                }
+                fclose(meminfo);
+            }
+            // Settings override: -1=auto, 0=off, 1=on
+            int setting = g_settings.mali_host_import;
+            bool auto_on = (gpu_gen >= 710) && (driver_ver < 54) && (total_ram_gb >= 11);
+            LOG("[vk] Mali host import auto: gpu_gen=%d, driver_ver=r%d, ram=%d GB -> %s\n",
+                gpu_gen, driver_ver, total_ram_gb, auto_on ? "on" : "off");
+            if (setting == 1) {
+                g_vk.host_import = true;
+            } else if (setting == 0) {
+                g_vk.host_import = false;
+            } else {
+                g_vk.host_import = auto_on;
+            }
+        }
+        if (!g_vk.host_import) {
+            LOG("[vk] guest heap import left off (%s)\n",
+                e ? "LARECOMP_VK_HOST_IMPORT=0" :
+                xclipse ? "Xclipse: its first submission fails" :
+                by_setting ? "settings: game memory on the GPU off" :
+                mali ? "Mali auto-gating" : "unknown");
         }
     }
 #endif
@@ -2179,7 +2233,11 @@ int ui_run(void) {
         while (SDL_WaitEventTimeout(&e, 16)) {
 #endif
 #ifdef __ANDROID__
-            if (e.type == SDL_EVENT_WILL_ENTER_BACKGROUND && g_vk.dev) vk_pipeline_cache_save();  // (may not come back)
+            if (e.type == SDL_EVENT_WILL_ENTER_BACKGROUND && g_vk.dev) {
+                vk_pipeline_cache_save();  // (may not come back)
+                extern void warmup_save_on_background(void);
+                warmup_save_on_background();
+            }
 #endif
             if (e.type == SDL_EVENT_QUIT) {
                 LOG("window closed\n");

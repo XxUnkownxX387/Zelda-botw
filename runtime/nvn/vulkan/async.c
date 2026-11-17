@@ -86,9 +86,19 @@ static void *render_main(void *arg) {
     // excluding descheduling/waits can understate the work seen by Android's frequency governor.
     const char *timing = getenv("LARECOMP_ADPF_CPU_TIME");
     bool cpu_timing = timing && atoi(timing) != 0;
+
+    // Initialize pipeline warm-up
+    extern void warmup_init(void);
+    warmup_init();
+
     pthread_mutex_lock(&q_lock);
     for (;;) {
-        while (q_head == q_tail) pthread_cond_wait(&q_more, &q_lock);
+        while (q_head == q_tail) {
+            // Process pipeline warm-up while idle (during loading screens/title screen)
+            extern void warmup_process_if_idle(void);
+            warmup_process_if_idle();
+            pthread_cond_wait(&q_more, &q_lock);
+        }
         Req r = q[q_head % QN];
         pthread_mutex_unlock(&q_lock);
         uint64_t t0 = plat_now_ns(), cpu0 = cpu_timing ? render_cpu_ns() : 0;

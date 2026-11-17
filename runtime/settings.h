@@ -64,6 +64,8 @@ typedef struct {
                           // as the app starts
     int vibration;        // a controller's rumble from the game's vibration (hle/input.c), % (0: off; 100 by default)
     bool vibration_phone; // the phone's own motor where no controller has one (hle/input.c; off by default)
+    bool prewarm;         // Shader pipeline warm-up at start (Video > Warm up shaders at start); on by default
+    int mali_host_import;  // Mali: allow guest heap import via VK_EXT_external_memory_host; -1 auto (on for Mali gen>=710, driver<r54, RAM>=11GB), 0 off, 1 on
     // Driver compatibility (the start screen's Settings > Prelaunch, ui/launcher.mm; from LASRecompAndroid), for GPUs
     // where a Turnip path draws wrong: read when the game starts (gpu_heap, inplace_reads) or when the app starts
     // (turnip_lrz, log_file). -1 Automatic: on for the Adreno 8xx GPUs these paths were made on, off elsewhere

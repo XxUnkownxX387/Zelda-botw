@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -67,6 +68,12 @@ static _Atomic int stat_compiles;
 static _Atomic int live_programs, live_gpipes, live_cpipes;  // (made so far: the memory mappings log, vk_live_counts)
 static void pipe_evict(void);  // (graphics pipelines: below)
 static _Atomic uint64_t stat_skipped_building;  // (never zeroed; hle/benchmark.c) draws skipped: their pipeline is still compiling
+
+// Pipeline warm-up
+static void warmup_init(void);
+static void warmup_on_pipeline_ready(Pipe *p);
+static void warmup_process_if_idle(void);
+static void warmup_save_on_background(void);
 static uint64_t op_counts[CMD_COUNT];
 bool g_debug_frame;
 static char stats_text[2048];
@@ -3217,6 +3224,339 @@ static void pipe_evict(void) {
     if (gone && nlog++ < 20) LOG("[vk] pipelines: %d unused ones destroyed, %d kept\n", gone, live);
 }
 
+// ================================================================== pipeline warm-up (shader pipeline pre-building)
+// The warm-up list stores PipeKey + shader hashes for pipelines we want to pre-build.
+// It's persisted to disk and loaded at startup to pre-compile pipelines during loading screens.
+// This reduces stutter by having pipelines ready before the game needs them.
+
+// Maximum number of keys in the warm-up list
+#define WARMUP_MAX_KEYS 6000
+// Maximum file size for the warm-up cache (4 MB)
+#define WARMUP_MAX_FILE_SIZE (4 * 1024 * 1024)
+// Save interval: every 60 seconds and on background
+#define WARMUP_SAVE_INTERVAL_NS (60 * 1000000000ull)
+
+// Warm-up key: PipeKey + shader program hashes (for validation)
+typedef struct {
+    PipeKey k;
+    uint64_t vs_hash;
+    uint64_t fs_hash;
+} WarmupKey;
+
+#define WARMUP_KEY_SIZE (sizeof(WarmupKey))
+
+// In-memory warm-up list
+static WarmupKey *g_warmup_keys = NULL;
+static int g_warmup_count = 0;
+static uint64_t g_warmup_used = 0;  // bitmask of used slots (for LRU)
+static uint64_t g_warmup_save_timer = 0;
+static pthread_mutex_t warmup_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// File header for the warm-up cache
+typedef struct {
+    uint32_t magic;          // 'B3WP' (BOTW 3 Warmup Pipe)
+    uint32_t version;        // version
+    uint64_t driver_uuid[2]; // driver UUID from pipelineCacheUUID
+    uint32_t count;          // number of keys
+    uint32_t reserved;       // reserved
+} WarmupHeader;
+
+// Forward declarations
+static bool warmup_load(void);
+static void warmup_save(void);
+static void warmup_add_key(const PipeKey *k, uint64_t vs_hash, uint64_t fs_hash);
+static void warmup_process(void);
+static bool warmup_should_stop(void);
+static bool warmup_shader_ready(uint64_t vs_hash, uint64_t fs_hash);
+
+// Load the warm-up cache from disk
+static bool warmup_load(void) {
+    if (!g_settings.prewarm) return false;
+    
+    FILE *f = fopen("cache/pipe_keys.bin", "rb");
+    if (!f) return false;
+    
+    WarmupHeader hdr;
+    if (fread(&hdr, sizeof(WarmupHeader), 1, f) != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    // Check magic
+    if (hdr.magic != 0x50573342) {  // 'B3WP'
+        fclose(f);
+        return false;
+    }
+    
+    // Check version
+    if (hdr.version != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    // Check driver UUID
+    if (hdr.driver_uuid[0] != g_vk.props.pipelineCacheUUID[0] ||
+        hdr.driver_uuid[1] != g_vk.props.pipelineCacheUUID[1]) {
+        LOG("[vk] warmup cache: driver changed, discarding\n");
+        fclose(f);
+        return false;
+    }
+    
+    if (hdr.count > WARMUP_MAX_KEYS) {
+        fclose(f);
+        return false;
+    }
+    
+    pthread_mutex_lock(&warmup_lock);
+    if (g_warmup_keys) free(g_warmup_keys);
+    g_warmup_keys = malloc(hdr.count * WARMUP_KEY_SIZE);
+    if (!g_warmup_keys) {
+        pthread_mutex_unlock(&warmup_lock);
+        fclose(f);
+        return false;
+    }
+    g_warmup_count = hdr.count;
+    size_t read = fread(g_warmup_keys, WARMUP_KEY_SIZE, hdr.count, f);
+    fclose(f);
+    
+    if (read != hdr.count) {
+        LOG("[vk] warmup: short read (%zu/%u)\n", read, hdr.count);
+        free(g_warmup_keys);
+        g_warmup_keys = NULL;
+        g_warmup_count = 0;
+        pthread_mutex_unlock(&warmup_lock);
+        return false;
+    }
+    
+    pthread_mutex_unlock(&warmup_lock);
+    LOG("[vk] warmup: loaded %u keys\n", g_warmup_count);
+    return true;
+}
+
+// Save the warm-up cache to disk
+static void warmup_save(void) {
+    if (!g_settings.prewarm || g_warmup_count == 0) return;
+    
+    pthread_mutex_lock(&warmup_lock);
+    
+    // Check file size limit
+    size_t file_size = sizeof(WarmupHeader) + g_warmup_count * WARMUP_KEY_SIZE;
+    if (file_size > WARMUP_MAX_FILE_SIZE) {
+        // Remove oldest entries (LRU - we use insertion order as proxy)
+        int keep = (WARMUP_MAX_FILE_SIZE - sizeof(WarmupHeader)) / WARMUP_KEY_SIZE;
+        if (g_warmup_count > keep) {
+            g_warmup_count = keep;
+        }
+    }
+    
+    FILE *f = fopen("cache/pipe_keys.bin", "wb");
+    if (!f) {
+        pthread_mutex_unlock(&warmup_lock);
+        return;
+    }
+    
+    WarmupHeader hdr = {
+        .magic = 0x50573342,  // 'B3WP'
+        .version = 1,
+        .driver_uuid = {g_vk.props.pipelineCacheUUID[0], g_vk.props.pipelineCacheUUID[1]},
+        .count = (uint32_t)g_warmup_count,
+        .reserved = 0,
+    };
+    
+    fwrite(&hdr, sizeof(WarmupHeader), 1, f);
+    fwrite(g_warmup_keys, WARMUP_KEY_SIZE, g_warmup_count, f);
+    fclose(f);
+    
+    pthread_mutex_unlock(&warmup_lock);
+    LOG("[vk] warmup: saved %u keys\n", g_warmup_count);
+}
+
+// Add a pipeline key to the warm-up list when it reaches state 1 (ready)
+void warmup_add_key(const PipeKey *key, uint64_t vs_hash, uint64_t fs_hash) {
+    if (!g_settings.prewarm) return;
+    
+    pthread_mutex_lock(&warmup_lock);
+    
+    // Check if already in list (by vs_hash + fs_hash)
+    for (int i = 0; i < g_warmup_count; i++) {
+        if (g_warmup_keys[i].vs_hash == vs_hash && g_warmup_keys[i].fs_hash == fs_hash) {
+            pthread_mutex_unlock(&warmup_lock);
+            return;
+        }
+    }
+    
+    // Add to list (with LRU eviction if at capacity)
+    if (g_warmup_count >= WARMUP_MAX_KEYS) {
+        // Remove oldest (simple FIFO for now, could be LRU)
+        memmove(g_warmup_keys, g_warmup_keys + 1, (WARMUP_MAX_KEYS - 1) * WARMUP_KEY_SIZE);
+        g_warmup_count--;
+    }
+    
+    WarmupKey *wk = &g_warmup_keys[g_warmup_count];
+    wk->k = *key;
+    wk->vs_hash = vs_hash;
+    wk->fs_hash = fs_hash;
+    g_warmup_count++;
+    
+    pthread_mutex_unlock(&warmup_lock);
+}
+
+// Check if we should stop warming (frame budget exceeded)
+static bool warmup_should_stop(void) {
+    if (!g_settings.prewarm) return true;
+    // Stop if we're missing frame budget (use frame pacer's measured frame time)
+    // We use the frame pacer's busy time as proxy
+    extern double vk_frame_work_ms(void);
+    double work_ms = vk_frame_work_ms();
+    if (work_ms > 0 && work_ms > 15.0) {  // missing 60 fps budget (16.67ms)
+        return true;
+    }
+    return false;
+}
+
+// Check if a shader program is ready (translated and in SPIR-V cache)
+// by looking up the Prog in the prog_tab by code addresses
+static bool warmup_shader_ready(uint64_t vs_hash, uint64_t fs_hash) {
+    extern struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
+    for (int i = 0; i < PROG_TAB; i++) {
+        Prog *p = prog_tab[i].prog;
+        if (p && p->code[0] == vs_hash && p->code[1] == fs_hash) {
+            // Found matching Prog, check if it's translated (state == 1)
+            return atomic_load(&p->state) == 1;
+        }
+    }
+    return false;  // Prog not found = not translated yet
+}
+
+// Process the warm-up queue: build pipelines for keys that are ready
+static void warmup_process(void) {
+    if (!g_settings.prewarm) return;
+    if (g_warmup_count == 0) return;
+    
+    // Don't warm up during active gameplay (check frame budget)
+    if (warmup_should_stop()) return;
+    
+    // Only run during loading screens or title screen (no game frame in flight)
+    extern bool framepace_on(void);
+    extern bool framepace_in_menu(void);
+    extern bool framepace_in_event(void);
+    extern volatile int g_movie_playing;
+    extern bool framepace_on_title(void);
+    
+    bool loading_or_title = !framepace_on() || framepace_in_menu() || framepace_in_event() || g_movie_playing > 0 || framepace_on_title();
+    if (!loading_or_title) return;
+    
+    pthread_mutex_lock(&warmup_lock);
+    
+    // Process up to N keys per second (rate limited)
+    static uint64_t last_process = 0;
+    uint64_t now = SDL_GetTicksNS();
+    if (now - last_process < 1000000000ull / 10) {  // max 10 per second
+        pthread_mutex_unlock(&warmup_lock);
+        return;
+    }
+    last_process = now;
+    
+    // Build up to 5 pipelines per call
+    int built = 0;
+    for (int i = 0; i < g_warmup_count && built < 5; i++) {
+        WarmupKey *wk = &g_warmup_keys[i];
+        
+        // Find the Prog for this shader pair
+        extern struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
+        Prog *prog = NULL;
+        for (int j = 0; j < PROG_TAB; j++) {
+            Prog *p = prog_tab[j].prog;
+            if (p && p->code[0] == wk->vs_hash && p->code[1] == wk->fs_hash) {
+                prog = p;
+                break;
+            }
+        }
+        
+        // Skip if Prog not found or not translated yet (state != 1)
+        if (!prog || atomic_load(&prog->state) != 1) continue;
+        
+        // Check if pipeline already exists in pipe_tab
+        uint64_t hash = hmix(1469598103934665603ull, &wk->k, sizeof(PipeKey));
+        uint64_t key = hash & (PIPE_TAB - 1);
+        extern struct { uint64_t key; Pipe *pipe; } pipe_tab[PIPE_TAB];
+        bool exists = false;
+        while (pipe_tab[key].key) {
+            if (pipe_tab[key].key == hash) {
+                Pipe *existing = pipe_tab[key].pipe;
+                if (existing && !existing->evicted && atomic_load(&existing->state) == 1) {
+                    exists = true;
+                }
+                break;
+            }
+            key = (key + 1) & (PIPE_TAB - 1);
+        }
+        if (exists) continue;
+        
+        // Allocate a new Pipe and add it to pipe_tab (same as normal pipeline creation)
+        Pipe *pp = calloc(1, sizeof *pp);
+        if (!pp) continue;
+        pp->k = wk->k;
+        pp->k.prog = prog;  // Set the Prog pointer for build_pipeline
+        pp->hash = hash;
+        atomic_store(&pp->state, 0);
+        pp->pipe = VK_NULL_HANDLE;
+        pp->used = 0;
+        pp->seq = 0;
+        pp->evicted = false;
+        
+        // Insert into pipe_tab
+        uint64_t insert_key = key;
+        while (pipe_tab[insert_key].key) {
+            insert_key = (insert_key + 1) & (PIPE_TAB - 1);
+        }
+        pipe_tab[insert_key].key = hash;
+        pipe_tab[insert_key].pipe = pp;
+        atomic_fetch_add(&live_gpipes, 1);
+        
+        // Submit to worker thread (runs at nice 10)
+        run_job(build_pipeline, pp);
+        
+        built++;
+    }
+    
+    pthread_mutex_unlock(&warmup_lock);
+    
+    if (g_warmup_count > 0) {
+        // Periodic save
+        uint64_t now = SDL_GetTicksNS();
+        if (now - g_warmup_save_timer > WARMUP_SAVE_INTERVAL_NS) {
+            warmup_save();
+            g_warmup_save_timer = now;
+        }
+    }
+}
+
+// Called when a pipeline reaches state 1 (ready) to add it to the warm-up list
+void warmup_on_pipeline_ready(Pipe *p) {
+    if (!g_settings.prewarm) return;
+    
+    uint64_t vs_hash = p->k.prog ? p->k.prog->code[0] : 0;
+    uint64_t fs_hash = p->k.prog ? p->k.prog->code[1] : 0;
+    warmup_add_key(&p->k, vs_hash, fs_hash);
+}
+
+// Process warm-up during loading screens/title screen
+void warmup_process_if_idle(void) {
+    warmup_process();
+}
+
+// Called at startup to load the warm-up cache
+void warmup_init(void) {
+    if (!g_settings.prewarm) return;
+    warmup_load();
+}
+
+// Called on background/background to save the warm-up cache
+void warmup_save_on_background(void) {
+    warmup_save();
+}
+
 // 8 bytes a step (PipeKey is ~700 bytes, hashed per draw); in-memory tables only - hmix values are compared with
 // stored constants (fragment-shader hashes) and must not change.
 static uint64_t hash_words(uint64_t h, const void *p, size_t n) {
@@ -3360,6 +3700,7 @@ static void build_pipeline(void *arg) {
                           (unsigned long long)k->prog->code[0], (unsigned long long)k->prog->code[1]);
     }
     atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
+    if (r == VK_SUCCESS) warmup_on_pipeline_ready(pp);
 }
 
 // ================================================================== feedback snapshots (renderer.m resolve_feedback)

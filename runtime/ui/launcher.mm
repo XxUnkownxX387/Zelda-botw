@@ -1636,6 +1636,25 @@ static void prelaunch_tab(float sc) {
         ImGui::TextDisabled("%s", tr("Number of shader compiler worker threads. Auto = clamp(cores-4, 2, 4). "
                                   "Overrides LARECOMP_SHADER_WORKERS env. Applies on next area entry."));
         ImGui::Spacing();
+        ImGui::Text("%s", tr("Warm up shaders at start"));
+        changed |= ImGui::Checkbox(tr("Warm up shaders at start"), &g_settings.prewarm);
+        ImGui::TextDisabled("%s", tr("Pre-build shader pipelines during loading screens to reduce stutter. On by default."));
+        ImGui::Spacing();
+        ImGui::Text("%s", tr("Mali host import (game memory on GPU)"));
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const char *mali_opts[] = {tr("Auto"), tr("Off"), tr("On")};
+        int mali_idx = g_settings.mali_host_import + 1;  // -1->0, 0->1, 1->2
+        if (mali_idx < 0) mali_idx = 0;
+        if (mali_idx > 2) mali_idx = 2;
+        changed |= ImGui::Combo("##mali_host_import", &mali_idx, mali_opts, 3);
+        if (mali_idx != g_settings.mali_host_import + 1) {
+            g_settings.mali_host_import = mali_idx - 1;
+            changed = true;
+        }
+        ImGui::TextDisabled("%s", tr("Allow importing the game's memory as a GPU buffer via VK_EXT_external_memory_host. "
+                                  "Auto: on for Mali GPU generation >= 710, driver version < r54, RAM >= 11 GB. "
+                                  "May cause missing text or crashes on some Mali drivers. Applies when BOTWRecompAndroid restarts."));
+        ImGui::Spacing();
         ImGui::Text("%s", tr("Driver variables"));  // (#227: g_settings.driver_env, vulkan/device.c)
         ImGui::SetNextItemWidth(-FLT_MIN);
         changed |= ImGui::InputTextWithHint("##driverenv", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1", g_settings.driver_env,

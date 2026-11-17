@@ -66,6 +66,8 @@ Settings g_settings = {
     .low_ram = -1,  // (auto: on for devices up to 4 GB)
     .vibration = 100,  // (% of controller rumble)
     .vibration_phone = false,  // (phone motor fallback off by default)
+    .prewarm = true,  // (Warm up shaders at start: on by default)
+    .mali_host_import = -1,  // (Mali host import: -1 auto, 0 off, 1 on)
 #else
     .show_fps = false,
 #endif
@@ -241,6 +243,8 @@ void settings_reset_defaults(void) {
     g_settings.low_ram = d->low_ram;
     g_settings.vibration = d->vibration;
     g_settings.vibration_phone = d->vibration_phone;
+    g_settings.prewarm = d->prewarm;
+    g_settings.mali_host_import = d->mali_host_import;
 #endif
 }
 
@@ -301,6 +305,8 @@ void settings_load(void) {
         else if (!strcmp(key, "low_ram")) g_settings.low_ram = !strcmp(val, "auto") ? -1 : atoi(val);
         else if (!strcmp(key, "vibration")) g_settings.vibration = atoi(val);
         else if (!strcmp(key, "vibration_phone")) g_settings.vibration_phone = atoi(val) != 0;
+        else if (!strcmp(key, "prewarm")) g_settings.prewarm = atoi(val) != 0;
+        else if (!strcmp(key, "mali_host_import")) g_settings.mali_host_import = atoi(val);
         else if (!strcmp(key, "overlay_scale")) g_settings.overlay_scale = atoi(val);
         else if (!strcmp(key, "overlay_opacity")) g_settings.overlay_opacity = atoi(val);
         else if (!strcmp(key, "overlay_items")) g_settings.overlay_items = atoi(val);
@@ -423,6 +429,8 @@ void settings_save(void) {
     fprintf(f, "low_ram = %s\n", TRI(g_settings.low_ram));
     fprintf(f, "vibration = %d\n", g_settings.vibration);
     fprintf(f, "vibration_phone = %d\n", g_settings.vibration_phone);
+    fprintf(f, "prewarm = %d\n", g_settings.prewarm);
+    fprintf(f, "mali_host_import = %d\n", g_settings.mali_host_import);
     fprintf(f, "overlay_scale = %d\n", g_settings.overlay_scale);
     fprintf(f, "overlay_opacity = %d\n", g_settings.overlay_opacity);
     fprintf(f, "overlay_items = %d\n", g_settings.overlay_items);
