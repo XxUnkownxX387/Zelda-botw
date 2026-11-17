@@ -1655,6 +1655,28 @@ static void prelaunch_tab(float sc) {
                                   "Auto: on for Mali GPU generation >= 710, driver version < r54, RAM >= 11 GB. "
                                   "May cause missing text or crashes on some Mali drivers. Applies when BOTWRecompAndroid restarts."));
         ImGui::Spacing();
+        ImGui::Text("%s", tr("VRAM budget (0 = unlimited)"));
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const char *vram_opts[] = {tr("Auto (Mali low RAM)"), "0 (unlimited)", "512 MB", "1024 MB", "1536 MB", "2048 MB"};
+        int vram_idx = 0;
+        if (g_settings.max_gpu_mem_mb == 0) vram_idx = 1;
+        else if (g_settings.max_gpu_mem_mb == 512) vram_idx = 2;
+        else if (g_settings.max_gpu_mem_mb == 1024) vram_idx = 3;
+        else if (g_settings.max_gpu_mem_mb == 1536) vram_idx = 4;
+        else if (g_settings.max_gpu_mem_mb == 2048) vram_idx = 5;
+        else vram_idx = 0;  // Auto
+        changed |= ImGui::Combo("##max_gpu_mem_mb", &vram_idx, vram_opts, 6);
+        if (vram_idx == 0) g_settings.max_gpu_mem_mb = -1;  // Auto
+        else if (vram_idx == 1) g_settings.max_gpu_mem_mb = 0;
+        else if (vram_idx == 2) g_settings.max_gpu_mem_mb = 512;
+        else if (vram_idx == 3) g_settings.max_gpu_mem_mb = 1024;
+        else if (vram_idx == 4) g_settings.max_gpu_mem_mb = 1536;
+        else if (vram_idx == 5) g_settings.max_gpu_mem_mb = 2048;
+        ImGui::TextDisabled("%s", tr("VRAM budget for textures+ring+buffer cache. 0 = unlimited. "
+                                  "Auto: on Mali with <= 8 GB RAM, sets ~35% of total RAM (512-1024 MB). "
+                                  "When exceeded, least-recently-used non-render-target textures are evicted. "
+                                  "Applies on next area entry."));
+        ImGui::Spacing();
         ImGui::Text("%s", tr("Driver variables"));  // (#227: g_settings.driver_env, vulkan/device.c)
         ImGui::SetNextItemWidth(-FLT_MIN);
         changed |= ImGui::InputTextWithHint("##driverenv", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1", g_settings.driver_env,

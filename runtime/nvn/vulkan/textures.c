@@ -23,6 +23,9 @@ static uint64_t g_vram_budget_bytes = 0;
 static NvnTexture **g_live;
 static int g_nlive, g_cap_live;
 
+// Forward declaration (defined in exec.c)
+extern uint64_t renderer_present_count(void);
+
 static void vram_budget_init(void) {
     if (g_vram_budget_bytes == 0 && g_settings.max_gpu_mem_mb > 0) {
         g_vram_budget_bytes = (uint64_t)g_settings.max_gpu_mem_mb * 1024 * 1024;
@@ -44,20 +47,25 @@ static void vram_budget_remove(uint64_t size) {
 static void vram_budget_maybe_evict(uint64_t current_frame) {
     if (g_vram_budget_bytes == 0 || g_vram_used_bytes <= g_vram_budget_bytes) return;
 
-    extern uint64_t renderer_present_count(void);
     uint64_t frame = renderer_present_count();
     if (frame == current_frame) return;  // already processed this frame
 
-    // Find LRU non-render-target texture to evict
+    // Find LRU non-render-target, recreatable texture to evict.
+    // Recreatable = not a render target (rs_group == RS_NONE), not GPU-owned,
+    // and can be re-uploaded from guest memory (dynamic or host-uploaded).
+    // Also skip recently used (last 2 frames - fixed unsigned underflow).
     NvnTexture *victim = NULL;
     uint64_t oldest = UINT64_MAX;
     for (int i = 0; i < g_nlive; i++) {
         NvnTexture *t = g_live[i];
         TexBackend *b = t ? (TexBackend *)t->backend : NULL;
         if (!b) continue;
-        // Skip render targets (rs_group != RS_NONE) and recently used (last 2 frames)
+        // Skip render targets
         if (b->rs_group != RS_NONE) continue;
-        if (b->last_used_frame > frame - 2) continue;
+        // Skip GPU-owned textures (not recreatable from guest memory)
+        if (b->gpu_owned) continue;
+        // Skip recently used (last 2 frames) - fix unsigned underflow
+        if (frame > 2 && b->last_used_frame > frame - 2) continue;
         if (b->last_used_frame < oldest) {
             oldest = b->last_used_frame;
             victim = t;
@@ -72,6 +80,12 @@ static void vram_budget_maybe_evict(uint64_t current_frame) {
         extern void backend_texture_destroyed(NvnTexture *t);
         backend_texture_destroyed(victim);
     }
+}
+
+// Called once per frame at present time (on render thread, GPU drained)
+// to evict textures if VRAM budget is exceeded.
+void vram_budget_evict_if_needed(void) {
+    vram_budget_maybe_evict(renderer_present_count());
 }
 
 // ================================================================== formats
@@ -670,7 +684,6 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     b->mem_size = alloc_info.size;
     vram_budget_add(b->mem_size);
     vram_budget_init();
-    vram_budget_maybe_evict(renderer_present_count());
 
     b->format = vf;
     b->width = tw; b->height = th; b->depth = depth; b->layers = layers; b->levels = levels; b->samples = samples;

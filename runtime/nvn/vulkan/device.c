@@ -1649,6 +1649,10 @@ void backend_present(NvnTexture *t) {
     } else {
         renderer_submit();
     }
+    // VRAM budget eviction: once per frame, on render thread, after GPU work submitted
+    extern void vram_budget_evict_if_needed(void);
+    vram_budget_evict_if_needed();
+
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
     frames++;

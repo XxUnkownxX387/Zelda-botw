@@ -77,7 +77,7 @@ Settings g_settings = {
     .sync_lag = true,           // (a few more fps; the CPU's reads of GPU results a frame old: nvn/objects.c nvnSyncWait)
     .out_lines = OUT_AUTO,      // (POCO F7 Ultra, 3200x1440, 1.8.2's Great Plateau: GPU 22.8 ms a frame at the screen's,
                                 // 18.6 at 1080 lines with a larger scene - the final image's passes over 2.2x the pixels)
-    .max_gpu_mem_mb = 1024,     // (0 = no VRAM limit; Mali: 1024 recommended to avoid Android OOM kills)
+    .max_gpu_mem_mb = 0,        // (0 = no VRAM limit; Mali with low RAM: auto-calculated as ~35% of total RAM)
 #else
     .upscaler = UPSCALE_SHARP,  // (MetalFX on macOS, AMD FSR 1 on Windows)
 #endif
@@ -310,7 +310,7 @@ void settings_load(void) {
         else if (!strcmp(key, "overlay_scale")) g_settings.overlay_scale = atoi(val);
         else if (!strcmp(key, "overlay_opacity")) g_settings.overlay_opacity = atoi(val);
         else if (!strcmp(key, "overlay_items")) g_settings.overlay_items = atoi(val);
-        else if (!strcmp(key, "max_gpu_mem_mb")) g_settings.max_gpu_mem_mb = atoi(val);
+        else if (!strcmp(key, "max_gpu_mem_mb")) g_settings.max_gpu_mem_mb = !strcmp(val, "auto") ? -1 : atoi(val);
         else if (!strcmp(key, "touch_scale")) g_settings.touch_scale = (float)atof(val);
         else if (!strcmp(key, "touch_opacity")) g_settings.touch_opacity = (float)atof(val);
         else if (!strcmp(key, "touch_drag_camera")) g_settings.touch_drag_camera = atoi(val) != 0;
@@ -389,6 +389,37 @@ void settings_load(void) {
             g_settings.shader_parallel = true;
         }
     }
+    // Auto-calculate max_gpu_mem_mb for Mali with low RAM (0 = unlimited, >0 = budget)
+    if (g_settings.max_gpu_mem_mb == 0) {
+        bool is_mali = strstr(g_settings.gpu_model, "Mali") || strstr(g_settings.gpu_model, "Immortalis");
+        if (is_mali) {
+            // Read total RAM from /proc/meminfo
+            FILE *f = fopen("/proc/meminfo", "r");
+            if (f) {
+                char line[256];
+                unsigned long total_kb = 0;
+                while (fgets(line, sizeof line, f)) {
+                    if (strncmp(line, "MemTotal:", 9) == 0) {
+                        sscanf(line + 9, "%lu", &total_kb);
+                        break;
+                    }
+                }
+                fclose(f);
+                if (total_kb > 0) {
+                    // Low RAM: <= 8 GB (8 * 1024 * 1024 KB)
+                    unsigned long total_mb = total_kb / 1024;
+                    if (total_mb <= 8192) {
+                        // ~35% of total RAM for VRAM budget
+                        g_settings.max_gpu_mem_mb = (int)(total_mb * 35 / 100);
+                        if (g_settings.max_gpu_mem_mb < 512) g_settings.max_gpu_mem_mb = 512;  // minimum
+                        if (g_settings.max_gpu_mem_mb > 1024) g_settings.max_gpu_mem_mb = 1024;  // maximum
+                        LOG("[settings] Mali low RAM detected (%lu MB): VRAM budget set to %d MB\n",
+                            total_mb, g_settings.max_gpu_mem_mb);
+                    }
+                }
+            }
+        }
+    }
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
@@ -434,7 +465,8 @@ void settings_save(void) {
     fprintf(f, "overlay_scale = %d\n", g_settings.overlay_scale);
     fprintf(f, "overlay_opacity = %d\n", g_settings.overlay_opacity);
     fprintf(f, "overlay_items = %d\n", g_settings.overlay_items);
-    fprintf(f, "max_gpu_mem_mb = %d\n", g_settings.max_gpu_mem_mb);
+    if (g_settings.max_gpu_mem_mb == -1) fprintf(f, "max_gpu_mem_mb = auto\n");
+    else fprintf(f, "max_gpu_mem_mb = %d\n", g_settings.max_gpu_mem_mb);
 #undef TRI
     fprintf(f, "touch_drag_camera = %d\ntouch_drag_sens = %.2f\ntouch_sticks_hidden = %d\ntouch_half_areas = %d\n",
             g_settings.touch_drag_camera, g_settings.touch_drag_sens, g_settings.touch_sticks_hidden,

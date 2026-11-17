@@ -173,6 +173,8 @@ void vk_defer_image(VkImage img, VmaAllocation mem);
 void vk_defer_view(VkImageView v);
 void vk_views_forget(TexBackend *b);  // drop (deferred) the cached views of an image being replaced
 uint64_t vk_frame_counter(void);
+// VRAM budget eviction (textures.c): call once per frame at present time, on render thread, GPU drained
+void vram_budget_evict_if_needed(void);
 
 // ---- shaders / pipelines (shaders.c)
 VkShaderModule vk_compile_glsl(const char *src, int stage, const char *name);  // NULL on failure (logged)
