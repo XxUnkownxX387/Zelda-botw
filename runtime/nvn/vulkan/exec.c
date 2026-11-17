@@ -71,7 +71,6 @@ static _Atomic uint64_t stat_skipped_building;  // (never zeroed; hle/benchmark.
 
 // Pipeline warm-up
 static void warmup_init(void);
-static void warmup_on_pipeline_ready(Pipe *p);
 static void warmup_process_if_idle(void);
 static void warmup_save_on_background(void);
 static uint64_t op_counts[CMD_COUNT];
@@ -3262,6 +3261,7 @@ typedef struct {
 } WarmupHeader;
 
 // Forward declarations
+static void build_pipeline(void *arg);  // (defined below, after pipe_tab)
 static bool warmup_load(void);
 static void warmup_save(void);
 static void warmup_add_key(const PipeKey *k, uint64_t vs_hash, uint64_t fs_hash);
@@ -3417,7 +3417,7 @@ static bool warmup_should_stop(void) {
 // Check if a shader program is ready (translated and in SPIR-V cache)
 // by looking up the Prog in the prog_tab by code addresses
 static bool warmup_shader_ready(uint64_t vs_hash, uint64_t fs_hash) {
-    extern struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
+    // prog_tab is defined at file scope (line ~2882)
     for (int i = 0; i < PROG_TAB; i++) {
         Prog *p = prog_tab[i].prog;
         if (p && p->code[0] == vs_hash && p->code[1] == fs_hash) {
@@ -3463,7 +3463,6 @@ static void warmup_process(void) {
         WarmupKey *wk = &g_warmup_keys[i];
         
         // Find the Prog for this shader pair
-        extern struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
         Prog *prog = NULL;
         for (int j = 0; j < PROG_TAB; j++) {
             Prog *p = prog_tab[j].prog;
@@ -3479,7 +3478,6 @@ static void warmup_process(void) {
         // Check if pipeline already exists in pipe_tab
         uint64_t hash = hmix(1469598103934665603ull, &wk->k, sizeof(PipeKey));
         uint64_t key = hash & (PIPE_TAB - 1);
-        extern struct { uint64_t key; Pipe *pipe; } pipe_tab[PIPE_TAB];
         bool exists = false;
         while (pipe_tab[key].key) {
             if (pipe_tab[key].key == hash) {
