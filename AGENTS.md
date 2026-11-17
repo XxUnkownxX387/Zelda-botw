@@ -41,3 +41,10 @@
 - NDK version : `30.0.16248370` (r30) — correspond à `build.gradle.kts` et CI.
 - `ANDROID_NDK_HOME=/opt/android-ndk` (ajouté à `~/.bashrc`).
 - clang/clang-tidy/cppcheck/llvm-addr2line disponibles localement (LLVM 16.0.6).
+
+## 7. Vérification automatisée avant push
+- **Lance `./check.sh` avant chaque push.**
+- Il compile en `-fsyntax-only` (avec `--sysroot`, les mêmes `-I` et `-D` que le CMake, y compris SDL3 via `$DEPS/include`).
+- Il vérifie tous les `.c`/`.cpp` listés par `git diff --name-only HEAD` et `--cached`.
+- Si un fichier ne peut pas être vérifié (ex: headers SDL3 manquants car deps non buildés localement), il l'indique explicitement (`SKIPPED: SDL3 headers not built...`), **ne dis jamais que c'est normal**.
+- Exit code non nul = échec, corriger avant de push.
