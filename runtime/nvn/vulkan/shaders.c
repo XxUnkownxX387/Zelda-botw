@@ -8,6 +8,8 @@
 #include "shaders.h"
 #include "shader_cache.h"
 
+static pthread_mutex_t builtin_shader_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void vk_shaders_init(void) {  // (compilers are per thread: check shaderc works at all)
     shaderc_compiler_t c = shaderc_compiler_initialize();
     if (!c) FATAL("shaderc_compiler_initialize failed\n");
@@ -628,27 +630,46 @@ static const char *builtin_src(const char *name, int *stage) {
 VkShaderModule vk_builtin_shader(const char *name) {
     static struct { char name[32]; VkShaderModule m; } cache[64];
     static int n;
-    for (int i = 0; i < n; i++) if (!strcmp(cache[i].name, name)) return cache[i].m;
+    pthread_mutex_lock(&builtin_shader_lock);
+    for (int i = 0; i < n; i++) if (!strcmp(cache[i].name, name)) {
+        VkShaderModule m = cache[i].m;
+        pthread_mutex_unlock(&builtin_shader_lock);
+        return m;
+    }
     int stage = 0;
     const char *src = builtin_src(name, &stage);
     if (!src) FATAL("no built-in shader %s\n", name);
     VkShaderModule m = vk_compile_glsl(src, stage, name);
     if (!m) FATAL("built-in shader %s failed to compile\n", name);
     if (n < 64) { snprintf(cache[n].name, sizeof cache[n].name, "%s", name); cache[n++].m = m; }
+    pthread_mutex_unlock(&builtin_shader_lock);
     return m;
 }
 
-// (Mali and the general precompilation) the internal shaders (present, post, clear) are compiled here before the
-// first frames: the first compile in the first frames is a hitch on top of the game's work - Mali's driver path
-// included - so it is done before the game starts drawing instead of on its first frame.
+// (All GPUs) the internal shaders (present, post, clear) are compiled here before the
+// first frames: the first compile in the first frames is a hitch on top of the game's work -
+// so it is done before the game starts drawing instead of on its first frame.
+// LARECOMP_NO_WARM=1 disables it.
 void vk_shaders_warm(void) {
-    static const char *const names[] = {"present.vert", "present.frag", "post.vert", "clear.vert", "clear.frag.none"};
+    if (getenv("LARECOMP_NO_WARM")) return;
+
+    // Compile all builtin shaders to VkShaderModule (caches them in vk_builtin_shader)
+    static const char *const names[] = {
+        "present.vert", "present.frag", "present_a.frag",
+        "post.vert", "fxaa.frag", "fsr1.frag",
+        "clear.vert", "clear.frag.none", "clear.frag.f0", "clear.frag.f1", "clear.frag.f2", "clear.frag.f3",
+        "clear.frag.i0", "clear.frag.i1", "clear.frag.i2", "clear.frag.i3",
+        "clear.frag.u0", "clear.frag.u1", "clear.frag.u2", "clear.frag.u3"
+    };
     for (int i = 0; i < (int)(sizeof names / sizeof names[0]); i++) {
         int stage = 0;
         const char *src = builtin_src(names[i], &stage);
         if (!src) continue;
-        size_t n;
-        uint32_t *spv = vk_glsl_to_spirv(src, stage, names[i], &n);
-        free(spv);
+        VkShaderModule m = vk_builtin_shader(names[i]);
+        (void)m;  // cached in vk_builtin_shader
     }
+
+    // Also create pipelines for present (common formats), post (fxaa), and clear (none)
+    // These require g_vk.dev to be initialized, so this should be called after device creation.
+    // The pipelines will be cached in exec.c's present_pipeline/post_pipeline/clear_pipeline.
 }

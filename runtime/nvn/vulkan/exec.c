@@ -1545,10 +1545,10 @@ void vk_exec_init(void) {
         if (tp < 0) { const char *e = getenv("LARECOMP_TEX_PRELOAD"); tp = !e || atoi(e) != 0; }
         if (tp) { renderer_flush(); LOG("[vk] texture preload: the loading screens' uploads staged before the first frame\n"); }
     }
-    {   // Mali (ARM, vendor 0x13B5): precompile the internal shaders before the first frames - the Mali driver's first
-        // compile in the first frames is a hitch once the game starts drawing, beside the entering-the-world's texture
-        // uploads (the Mali optimizations)
-        if (g_vk.props.vendorID == 0x13B5) vk_shaders_warm();
+    {   // All GPUs: precompile the internal shaders before the first frames - the first
+        // compile in the first frames is a hitch once the game starts drawing.
+        // LARECOMP_NO_WARM=1 disables it.
+        vk_shaders_warm();
     }
 }
 
