@@ -7,20 +7,27 @@
   SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
   R=/public/Zelda-botw
   DEPS="$R/android/deps/out"
+  SDL3_HEADERS="/opt/sdl3-src/include"
+  VOLK_HEADERS="/opt/volk-src"
+  VMA_HEADERS="/opt/vma-src/include"
+  SHADERC_HEADERS="/opt/shaderc-src/libshaderc/include"
   IMGUI="$R/third_party/imgui"
   BOTW_GEN_DIR="$R/android/botwrecompandroid/app/build/generated/botwrecompandroid/inc"
 
   clang --target=aarch64-none-linux-android30 --sysroot="$SYSROOT" \
     -I"$R/runtime" -I"$R/runtime/nvn" -I"$IMGUI" -I"$IMGUI/backends" \
-    -I"$DEPS/include" -I"$DEPS/volk" -I"$BOTW_GEN_DIR" \
+    -I"$DEPS/include" -I"$SDL3_HEADERS" -I"$VOLK_HEADERS" \
+    -I"$VMA_HEADERS" -I"$SHADERC_HEADERS" \
+    -I"$BOTW_GEN_DIR" \
     -I"$R/third_party/smaa/Textures" -I"$R/android/common" \
     -DVK_NO_PROTOTYPES -DVK_USE_PLATFORM_ANDROID_KHR -DIMGUI_IMPL_VULKAN_USE_VOLK \
     -DVMA_STATIC_VULKAN_FUNCTIONS=0 -DVMA_DYNAMIC_VULKAN_FUNCTIONS=1 \
     -fsyntax-only <fichier.c>
   ```
   **Zéro erreur obligatoire**. Corriger avant de push.
-  - Note : les headers SDL3/VMA/FFmpeg sont dans `$DEPS/include` (buildés par `android/deps/build_deps.sh`).
-  - Pour les fichiers n'utilisant pas SDL3 (ex: `bc3_astc.c`), la commande passe sans les deps.
+  - Note : les headers SDL3/VMA/volk/shaderc sont dans `/opt/*-src/` (clonés depuis les tags officiels).
+  - Pour les fichiers n'utilisant pas ces deps (ex: `bc3_astc.c`), la commande passe sans.
+  - Les headers dans `$DEPS/include` (buildés par `android/deps/build_deps.sh`) sont utilisés par la CI.
 
 ## 2. Nouveaux fichiers .c
 - Ajouter le fichier au `CMakeLists.txt` utilisé par la build Android (`android/botwrecompandroid/app/src/main/cpp/CMakeLists.txt`).
@@ -44,7 +51,7 @@
 
 ## 7. Vérification automatisée avant push
 - **Lance `./check.sh` avant chaque push.**
-- Il compile en `-fsyntax-only` (avec `--sysroot`, les mêmes `-I` et `-D` que le CMake, y compris SDL3 via `$DEPS/include`).
+- Il compile en `-fsyntax-only` (avec `--sysroot`, les mêmes `-I` et `-D` que le CMake, y compris SDL3/VMA/volk/shaderc via `/opt/*-src/`).
 - Il vérifie tous les `.c`/`.cpp` listés par `git diff --name-only HEAD` et `--cached`.
-- Si un fichier ne peut pas être vérifié (ex: headers SDL3 manquants car deps non buildés localement), il l'indique explicitement (`SKIPPED: SDL3 headers not built...`), **ne dis jamais que c'est normal**.
+- Si un fichier ne peut pas être vérifié (headers manquants), il liste explicitement les headers manquants, **ne dis jamais que c'est normal**.
 - Exit code non nul = échec, corriger avant de push.

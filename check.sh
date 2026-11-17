@@ -8,6 +8,10 @@ export ANDROID_NDK_HOME=/opt/android-ndk
 SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 R="/public/Zelda-botw"
 DEPS="$R/android/deps/out"
+SDL3_HEADERS="/opt/sdl3-src/include"
+VOLK_HEADERS="/opt/volk-src"
+VMA_HEADERS="/opt/vma-src/include"
+SHADERC_HEADERS="/opt/shaderc-src/libshaderc/include"
 IMGUI="$R/third_party/imgui"
 BOTW_GEN_DIR="$R/android/botwrecompandroid/app/build/generated/botwrecompandroid/inc"
 
@@ -18,7 +22,10 @@ INCLUDES=(
   -I"$IMGUI"
   -I"$IMGUI/backends"
   -I"$DEPS/include"
-  -I"$DEPS/volk"
+  -I"$SDL3_HEADERS"
+  -I"$VOLK_HEADERS"
+  -I"$VMA_HEADERS"
+  -I"$SHADERC_HEADERS"
   -I"$BOTW_GEN_DIR"
   -I"$R/third_party/smaa/Textures"
   -I"$R/android/common"
@@ -57,17 +64,9 @@ fi
 echo "Checking ${#CHECK_FILES[@]} file(s)..."
 
 FAILED=0
-SDL3_MISSING=0
+MISSING_HEADERS=()
 for f in "${CHECK_FILES[@]}"; do
   echo -n "  $f: "
-  # Check if file includes SDL3
-  if grep -q '#include <SDL3/' "$f" 2>/dev/null; then
-    if [ ! -d "$DEPS/include/SDL3" ]; then
-      echo "SKIPPED (SDL3 headers not built - run android/deps/build_deps.sh or build in CI)"
-      SDL3_MISSING=1
-      continue
-    fi
-  fi
   # Use clang exit code (0=OK, non-zero=error)
   if clang --target=aarch64-none-linux-android30 --sysroot="$SYSROOT" \
       "${INCLUDES[@]}" "${DEFINES[@]}" \
@@ -75,15 +74,23 @@ for f in "${CHECK_FILES[@]}"; do
     echo "OK"
   else
     echo "FAILED"
-    clang --target=aarch64-none-linux-android30 --sysroot="$SYSROOT" \
+    # Capture stderr to find missing headers
+    ERRORS=$(clang --target=aarch64-none-linux-android30 --sysroot="$SYSROOT" \
       "${INCLUDES[@]}" "${DEFINES[@]}" \
-      -fsyntax-only "$f" 2>&1 | head -20
+      -fsyntax-only "$f" 2>&1)
+    echo "$ERRORS" | head -20
+    # Extract missing header names
+    echo "$ERRORS" | grep -oE "fatal error: '[^']+'" | sed "s/fatal error: '//; s/'//" | while read hdr; do
+      if [[ ! " ${MISSING_HEADERS[@]} " =~ " ${hdr} " ]]; then
+        MISSING_HEADERS+=("$hdr")
+      fi
+    done
     FAILED=1
   fi
 done
 
-if [ $SDL3_MISSING -eq 1 ]; then
-  echo "NOTE: Some files skipped due to missing SDL3 headers (build deps in CI)"
+if [ ${#MISSING_HEADERS[@]} -gt 0 ]; then
+  echo "MISSING HEADERS (not in sysroot, DEPS, or SDL3): ${MISSING_HEADERS[*]}"
 fi
 
 if [ $FAILED -eq 1 ]; then
