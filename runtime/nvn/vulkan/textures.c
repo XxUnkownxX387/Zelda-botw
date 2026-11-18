@@ -628,6 +628,8 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     if (rt_list < 0) {
         const char *e = getenv("LARECOMP_VK_RT_FORMAT_LIST");
         rt_list = e ? atoi(e) != 0 : getenv("LARECOMP_VK_NO_MUTABLE") != NULL || g_vk.props.vendorID == 0x13B5;
+        if (g_settings.afbc_advanced && g_vk.props.vendorID == 0x13B5) rt_list = 1;  // (the user setting: the Mali-G720's
+        // advanced AFBC keeps the render targets compressible - the format list; off: no compression, whole-image moves)
         if (rt_list) LOG("[vk] render targets without mutable formats (their sRGB twin in a format list)\n");
     }
     VkFormat twin = vf == VK_FORMAT_R8G8B8A8_UNORM ? VK_FORMAT_R8G8B8A8_SRGB : vf == VK_FORMAT_R8G8B8A8_SRGB ? VK_FORMAT_R8G8B8A8_UNORM
@@ -666,7 +668,15 @@ static void create_image(NvnTexture *t, TexBackend *b) {
                             .extent = {tw, th, depth}, .mipLevels = levels, .arrayLayers = layers,
                             .samples = (VkSampleCountFlagBits)samples, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage,
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
-    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    // Mali-G720 (UMA on Dimensity 8400-Ultra): use AUTO instead of AUTO_PREFER_DEVICE since there's no
+    // separate VRAM. Dedicated allocations for large render targets improve AFBC compression and reduce
+    // fragmentation. On UMA, VMA_AUTO maps to the same unified memory pool.
+    bool is_mali_uma = (g_vk.props.vendorID == 0x13B5);
+    VmaAllocationCreateInfo ai = {.usage = is_mali_uma ? VMA_MEMORY_USAGE_AUTO : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    // Large render targets (>256KB) benefit from dedicated allocations on Mali for AFBC
+    uint64_t img_size_est = (uint64_t)tw * th * layers * 4;  // rough estimate
+    if (is_mali_uma && (ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) && img_size_est > 256 * 1024)
+        ai.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     VkResult r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
     if (r != VK_SUCCESS) {
         LOG("[vk] image creation failed (%d): nvn fmt %#x %ux%ux%u target %u\n", r, t->format, t->width, t->height, t->depth, t->target);
@@ -940,7 +950,8 @@ static void upload_scaled(VkCommandBuffer cb, TexBackend *b, VkSpan s, VkBufferI
     VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = b->format,
                             .extent = {gw, gh, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
                             .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
-    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    bool is_mali_uma = (g_vk.props.vendorID == 0x13B5);
+    VmaAllocationCreateInfo ai = {.usage = is_mali_uma ? VMA_MEMORY_USAGE_AUTO : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     VkImage img;
     VmaAllocation mem;
     if (vmaCreateImage(g_vk.vma, &ci, &ai, &img, &mem, NULL) != VK_SUCCESS) return;
@@ -1604,7 +1615,8 @@ static BcShadow *bc_shadow_create(NvnTexture *t, TexBackend *b, VkFormat vf, uin
                             .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
                             .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                      VK_IMAGE_USAGE_TRANSFER_DST_BIT};  // (bc_shadow_fill)
-    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    bool is_mali_uma = (g_vk.props.vendorID == 0x13B5);
+    VmaAllocationCreateInfo ai = {.usage = is_mali_uma ? VMA_MEMORY_USAGE_AUTO : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     if (!(s->drawn = calloc(nslices, 1)) || vmaCreateImage(g_vk.vma, &ci, &ai, &i->image, &i->mem, NULL) != VK_SUCCESS) {
         static int nfail;
         if (nfail++ < 4) LOG("[vk] BC %ux%ux%u drawn into as %d: no shadow image\n", t->width, t->height, t->depth, vf);
@@ -1766,7 +1778,8 @@ VkImageView vk_dummy_view(int textype) {
                             .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {1, 1, 1}, .mipLevels = 1, .arrayLayers = cube ? 6 : 1,
                             .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
                             .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
-    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    bool is_mali_uma = (g_vk.props.vendorID == 0x13B5);
+    VmaAllocationCreateInfo ai = {.usage = is_mali_uma ? VMA_MEMORY_USAGE_AUTO : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
     VkCommandBuffer cb = vk_upload_cmd();
     vk_image_init_layout(cb, b->image, VK_IMAGE_ASPECT_COLOR_BIT);

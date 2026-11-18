@@ -945,7 +945,12 @@ static void create_device(void) {
 #endif
     vkGetDeviceQueue(g_vk.dev, g_vk.qfam, 0, &g_vk.queue);
 
-    VmaAllocatorCreateInfo ai = {.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT, .physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
+    VmaAllocatorCreateInfo ai = {.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT |
+                                     VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
+                                     VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT |
+                                     VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT |
+                                     VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT,
+                                 .physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
                                  .vulkanApiVersion = VK_API_VERSION_1_3};
 #ifdef __ANDROID__
     ai.vulkanApiVersion = g_vk.api;

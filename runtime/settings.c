@@ -68,6 +68,9 @@ Settings g_settings = {
     .vibration_phone = false,  // (phone motor fallback off by default)
     .prewarm = true,  // (Warm up shaders at start: on by default)
     .mali_host_import = -1,  // (Mali host import: -1 auto, 0 off, 1 on)
+    .vrs_mali = true,       // (Mali-G720 / Immortalis Gen4: the VK_KHR_fragment_shading_rate 2x2 on the post passes)
+    .afbc_advanced = true,  // (the Mali's advanced AFBC compression)
+    .thermal_perf = 0,      // (0: Auto - the thermal cap; 1: Performance - no app-level drop; 2: Balanced - status only)
 #else
     .show_fps = false,
 #endif
@@ -245,6 +248,9 @@ void settings_reset_defaults(void) {
     g_settings.vibration_phone = d->vibration_phone;
     g_settings.prewarm = d->prewarm;
     g_settings.mali_host_import = d->mali_host_import;
+    g_settings.vrs_mali = d->vrs_mali;
+    g_settings.afbc_advanced = d->afbc_advanced;
+    g_settings.thermal_perf = d->thermal_perf;
 #endif
 }
 
@@ -289,6 +295,7 @@ void settings_load(void) {
         else if (!strcmp(key, "frame_rate")) g_settings.fps_mode = !strcmp(val, "30") ? 1 : !strcmp(val, "60") ? 2 : !strcmp(val, "20") ? 3 : !strcmp(val, "45") ? 4 : 0;
         else if (!strcmp(key, "framegen")) g_settings.framegen = atoi(val) != 0;
         else if (!strcmp(key, "thermal_cap")) g_settings.thermal_cap = atoi(val) != 0;
+        else if (!strcmp(key, "thermal_perf")) g_settings.thermal_perf = atoi(val) >= 0 && atoi(val) <= 2 ? atoi(val) : 0;
         else if (!strcmp(key, "shader_int32")) g_settings.shader_int32 = atoi(val) != 0;
         else if (!strcmp(key, "shader_parallel")) g_settings.shader_parallel = atoi(val) != 0;
         else if (!strcmp(key, "shader_threads")) g_settings.shader_threads = atoi(val);
@@ -307,6 +314,8 @@ void settings_load(void) {
         else if (!strcmp(key, "vibration_phone")) g_settings.vibration_phone = atoi(val) != 0;
         else if (!strcmp(key, "prewarm")) g_settings.prewarm = atoi(val) != 0;
         else if (!strcmp(key, "mali_host_import")) g_settings.mali_host_import = atoi(val);
+        else if (!strcmp(key, "vrs_mali")) g_settings.vrs_mali = atoi(val) != 0;
+        else if (!strcmp(key, "afbc_advanced")) g_settings.afbc_advanced = atoi(val) != 0;
         else if (!strcmp(key, "overlay_scale")) g_settings.overlay_scale = atoi(val);
         else if (!strcmp(key, "overlay_opacity")) g_settings.overlay_opacity = atoi(val);
         else if (!strcmp(key, "overlay_items")) g_settings.overlay_items = atoi(val);
@@ -447,6 +456,7 @@ void settings_save(void) {
                g_settings.fps_mode == 4 ? "45" : "auto");
     fprintf(f, "framegen = %d\n", g_settings.framegen);
     fprintf(f, "thermal_cap = %d\n", g_settings.thermal_cap);
+    fprintf(f, "thermal_perf = %d\n", g_settings.thermal_perf);
     fprintf(f, "cutscenes_60 = %d\n", g_settings.event_fps_unlock);
     fprintf(f, "shader_int32 = %d\nsync_lag = %d\nnative_code = %d\nfiles_in_place = %d\n", g_settings.shader_int32,
             g_settings.sync_lag, g_settings.native_code, g_settings.files_in_place);
@@ -462,6 +472,8 @@ void settings_save(void) {
     fprintf(f, "vibration_phone = %d\n", g_settings.vibration_phone);
     fprintf(f, "prewarm = %d\n", g_settings.prewarm);
     fprintf(f, "mali_host_import = %d\n", g_settings.mali_host_import);
+    fprintf(f, "vrs_mali = %d\n", g_settings.vrs_mali);
+    fprintf(f, "afbc_advanced = %d\n", g_settings.afbc_advanced);
     fprintf(f, "overlay_scale = %d\n", g_settings.overlay_scale);
     fprintf(f, "overlay_opacity = %d\n", g_settings.overlay_opacity);
     fprintf(f, "overlay_items = %d\n", g_settings.overlay_items);

@@ -683,6 +683,20 @@ static void tab_display(void) {
                "Translates the game's shaders with 32-bit address math, the path used for drivers without 64-bit "
                "integers (Adreno 6xx / 7xx and Mali stock drivers). Try it if lighting, grass or text are missing or wrong "
                "on your GPU. Applies to shaders translated from now on: restart the app for all of them.");
+    opt_toggle("Mode VRS Mali-G720", &g_settings.vrs_mali, true,
+               "Variable Rate Shading on Mali-G720 / Immortalis Gen4: applies a reduced fragment shading rate (2x2) "
+               "on the post-processing passes (SMAA, FXAA, upscalers). Requires VK_KHR_fragment_shading_rate "
+               "support in the driver. Off: full-rate post passes. Applies at once.");
+    opt_toggle("Compression AFBC avancée", &g_settings.afbc_advanced, true,
+               "Advanced AFBC (Arm Frame Buffer Compression) on Mali: keeps render targets compressed through their "
+               "format list, reducing bandwidth. Off: each pass's loads and stores move the images whole (no compression). "
+               "Applies at once; restart the app for all textures.");
+    static const char *thermal_modes[] = {"Auto (cap thermique)", "Performance (maintient le taux)", "Équilibré (statut seulement)"};
+    opt_choice("Mode performance thermique", &g_settings.thermal_perf, thermal_modes, 3, 0,
+               "Thermal performance mode for the Dimensity chipset. Auto: the thermal cap drops to 30 fps when hot "
+               "(Android status SEVERE or headroom forecast). Performance: holds the chosen frame rate while hot, "
+               "no app-level drop. Balanced: only the Android thermal status triggers a drop, not the headroom forecast. "
+               "Applies at once.");
 #endif
     opt_end();
 }
