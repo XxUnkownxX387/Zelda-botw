@@ -620,6 +620,15 @@ static void create_device(void) {
             } else {
                 g_vk.host_import = auto_on;
             }
+            // VK_ARM_scheduling_controls errata (SDEN-3735689): feature-query bug on drivers r47p0-r49p2
+            // (fixed r49p3/r53p0). Mali-G720 on Xiaomi 15T is r49p1 (affected) - explicitly do NOT enable.
+            if (has_ext(ep, ne, VK_ARM_SCHEDULING_CONTROLS_EXTENSION_NAME)) {
+                if (driver_ver >= 47 && driver_ver <= 49) {
+                    LOG("[vk-cap] VK_ARM_scheduling_controls present but disabled: Mali r%d (r47-r49 errata)\n", driver_ver);
+                } else {
+                    LOG("[vk-cap] VK_ARM_scheduling_controls available (not on affected Mali driver)\n");
+                }
+            }
         }
         if (!g_vk.host_import) {
             LOG("[vk] guest heap import left off (%s)\n",
@@ -675,18 +684,6 @@ static void create_device(void) {
     const char *pv = getenv("LARECOMP_PACE_VSYNC");
     display_timing = has_ext(ep, ne, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME) && (!pv || atoi(pv));
     if (display_timing) ext[n_ext++] = VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME;
-    // VK_ARM_scheduling_controls: provides fine-grained GPU work scheduling control.
-    // Errata (SDEN-3735689): feature-query bug on drivers r47p0-r49p2 (fixed r49p3/r53p0).
-    // Mali-G720 on Xiaomi 15T is r49p1 (affected) - explicitly do NOT enable this extension.
-    bool is_mali_r49_affected = mali && driver_ver >= 47 && driver_ver <= 49;
-    if (has_ext(ep, ne, VK_ARM_SCHEDULING_CONTROLS_EXTENSION_NAME)) {
-        if (is_mali_r49_affected) {
-            LOG("[vk-cap] VK_ARM_scheduling_controls present but disabled: Mali r%d (r47-r49 errata)\n", driver_ver);
-        } else {
-            LOG("[vk-cap] VK_ARM_scheduling_controls available (not on affected Mali driver)\n");
-            // Could enable here if needed: ext[n_ext++] = VK_ARM_SCHEDULING_CONTROLS_EXTENSION_NAME;
-        }
-    }
 #endif
     free(ep);
 
