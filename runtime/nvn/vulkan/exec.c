@@ -895,6 +895,24 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
                                      .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}};
     VkSemaphoreSubmitInfo wt = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = wait,
                                 .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
+    
+    // Mali-G720 turbo: use more specific stage masks to reduce unnecessary synchronization
+    // Only use ALL_COMMANDS_BIT for actual present submissions, not for intermediate submits
+    bool is_mali_g720_turbo = false;
+#ifdef __ANDROID__
+    if (g_settings.turbo_mali && g_vk.props.vendorID == 0x13B5) {
+        const char *name = g_vk.props.deviceName;
+        if (strstr(name, "Mali-G720") || strstr(name, "Immortalis-G720")) {
+            // For Mali-G720 turbo: use more specific stage masks
+            if (!wait && !signal) {
+                // Regular submit: only need FRAGMENT_SHADER and COLOR_ATTACHMENT_OUTPUT
+                sig[0].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                sig[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            }
+        }
+    }
+#endif
+
     VkSubmitInfo2 si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2, .commandBufferInfoCount = (uint32_t)n, .pCommandBufferInfos = cbs,
                         .signalSemaphoreInfoCount = signal ? 2 : 1, .pSignalSemaphoreInfos = sig,
                         .waitSemaphoreInfoCount = wait ? 1 : 0, .pWaitSemaphoreInfos = &wt};
@@ -2095,6 +2113,18 @@ static void begin_pass(void) {
         }
         extern int vk_ab(const char *what);
         long ch = chunk > 0 && AB("chunk") == 1 ? 500 : chunk;
+        
+        // Mali-G720 turbo: much more aggressive early submission
+        // Submit after just 500µs of translation work to keep GPU fed continuously
+        bool is_mali_g720_turbo = false;
+        if (g_settings.turbo_mali && g_vk.props.vendorID == 0x13B5) {
+            const char *name = g_vk.props.deviceName;
+            if (strstr(name, "Mali-G720") || strstr(name, "Immortalis-G720")) {
+                is_mali_g720_turbo = true;
+            }
+        }
+        if (is_mali_g720_turbo) ch = 500;  // aggressive early submission
+        
         if (ch > 0 && vk_async_on() && last_submit_ns && SDL_GetTicksNS() - last_submit_ns > (uint64_t)ch * 1000)
             renderer_submit();
     }
@@ -2111,6 +2141,24 @@ static void begin_pass(void) {
     bool need_barrier = true;
     if (no_barrier) need_barrier = false;
     else if (AB("nobarrier") != 1) need_barrier = restart || pass_stored;
+    
+    // Mali-G720 optimization: on Mali-G720 with turbo mode, be more aggressive about skipping barriers
+    // since we know the render pass order and can rely on subpass-like behavior via dynamic rendering
+    bool is_mali_g720_turbo = false;
+#ifdef __ANDROID__
+    if (g_settings.turbo_mali && g_vk.props.vendorID == 0x13B5) {
+        const char *name = g_vk.props.deviceName;
+        if (strstr(name, "Mali-G720") || strstr(name, "Immortalis-G720")) {
+            is_mali_g720_turbo = true;
+        }
+    }
+#endif
+    if (is_mali_g720_turbo) {
+        // On Mali-G720 turbo: only need barrier on actual restart, not on pass_stored
+        // The GPU can pipeline passes more efficiently when we know there's no actual data hazard
+        need_barrier = restart;
+    }
+    
     if (need_barrier) vk_full_barrier(cb);  // passes, copies and dispatches see each other's results
     pass_stored = false;  // (a new pass starts: the previous pass's stores are now accounted for)
     {
