@@ -926,6 +926,11 @@ static void create_device(void) {
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR f_fsr = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR, .pipelineFragmentShadingRate = VK_TRUE};
     if (g_vk.fragment_shading_rate) { f_fsr.pNext = f.pNext; f.pNext = &f_fsr; LOG("[vk-cap] fragment shading rate on\n"); }
+    // Immortalis Gen4 / Mali-G720 (ARM Mali 5th Gen, Dimensity 8400-Ultra): the architecture's own features - VRS through
+    // VK_KHR_fragment_shading_rate (driver r49p1) and deferred vertex shading (DVS) with it. On that architecture the
+    // post passes' non-critical secondary passes then run at a reduced shading rate (exec.c post_pass).
+    if (g_vk.props.vendorID == 0x13B5 && (strstr(g_vk.props.deviceName, "Mali-G7") || strstr(g_vk.props.deviceName, "Immortalis-G7")))
+        LOG("[vk-cap] architecture: Mali-G720 / Immortalis Gen4 (ARM Mali 5th Gen) - VRS via VK_KHR_fragment_shading_rate on");
 #endif
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = g_vk.qfam,
