@@ -45,29 +45,69 @@ static bool driver_has_gpu(PFN_vkGetInstanceProcAddr gipa) {
 static char g_rejected[128];
 const char *vk_driver_rejected(void) { return g_rejected; }
 
+// Check if the driver's GPU is Adreno (vendor 0x5143 = Qualcomm). Used to avoid loading Turnip on non-Adreno GPUs.
+static bool driver_is_adreno(PFN_vkGetInstanceProcAddr gipa) {
+    PFN_vkCreateInstance create = (PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance");
+    if (!create) return false;
+    VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO, .apiVersion = VK_API_VERSION_1_3};
+    VkInstanceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, .pApplicationInfo = &app};
+    VkInstance inst;
+    if (create(&ci, NULL, &inst) != VK_SUCCESS) return false;
+    PFN_vkEnumeratePhysicalDevices enumerate = (PFN_vkEnumeratePhysicalDevices)gipa(inst, "vkEnumeratePhysicalDevices");
+    PFN_vkGetPhysicalDeviceProperties props = (PFN_vkGetPhysicalDeviceProperties)gipa(inst, "vkGetPhysicalDeviceProperties");
+    PFN_vkDestroyInstance destroy = (PFN_vkDestroyInstance)gipa(inst, "vkDestroyInstance");
+    bool is_adreno = false;
+    uint32_t n = 0;
+    if (enumerate && props && enumerate(inst, &n, NULL) == VK_SUCCESS && n) {
+        VkPhysicalDevice pd[8];
+        if (n > 8) n = 8;
+        if (enumerate(inst, &n, pd) >= 0)
+            for (uint32_t i = 0; i < n && !is_adreno; i++) {
+                VkPhysicalDeviceProperties p;
+                props(pd[i], &p);
+                if (p.vendorID == 0x5143) is_adreno = true;  // Qualcomm/Adreno
+            }
+    }
+    if (destroy) destroy(inst, NULL);
+    return is_adreno;
+}
+
 void vk_android_load(void) {
     void *lib = NULL;
     const char *drv = getenv("LARECOMP_VK_DRIVER"), *hooks = getenv("LARECOMP_NATIVE_LIB_DIR");
     if (drv && *drv && hooks && *hooks) {
-        const char *slash = strrchr(drv, '/');
-        char dir[1024];
-        if (slash && (size_t)snprintf(dir, sizeof dir, "%.*s/", (int)(slash - drv), drv) < sizeof dir)
-            lib = adrenotools_open_libvulkan(RTLD_NOW | RTLD_LOCAL, ADRENOTOOLS_DRIVER_CUSTOM, NULL, hooks, dir, slash + 1,
-                                             NULL, NULL);
-        LOG("[vk] driver %s: %s\n", drv, lib ? "loaded through adrenotools" : "FAILED, using the system driver");
-        PFN_vkGetInstanceProcAddr g = lib ? (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr") : NULL;
-        if (lib && (!g || !driver_has_gpu(g))) {
-            LOG("[vk] driver %s: no Vulkan 1.1+ GPU it supports here - using the system driver\n", drv);
-            lib = NULL;  // (left loaded: a driver doesn't always unload cleanly)
-        }
-        if (!lib) {  // (the package's name: its folder, files/drivers/<name>/<library>)
-            const char *name = drv;
-            if (slash) {
-                const char *p = slash;
-                while (p > drv && p[-1] != '/') p--;
-                name = p;
+        // Check if the custom driver is Adreno (Turnip) - if not, skip adrenotools and use system driver
+        // Load a temporary instance to check the GPU vendor
+        void *temp_lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (temp_lib) {
+            PFN_vkGetInstanceProcAddr temp_gipa = (PFN_vkGetInstanceProcAddr)dlsym(temp_lib, "vkGetInstanceProcAddr");
+            if (temp_gipa && !driver_is_adreno(temp_gipa)) {
+                LOG("[vk] custom driver requested but GPU is not Adreno (vendor != 0x5143): using system driver instead\n");
+                drv = NULL;  // Force fallback to system driver
             }
-            snprintf(g_rejected, sizeof g_rejected, "%.*s", slash && name < slash ? (int)(slash - name) : (int)strlen(name), name);
+            dlclose(temp_lib);
+        }
+        if (drv && *drv) {
+            const char *slash = strrchr(drv, '/');
+            char dir[1024];
+            if (slash && (size_t)snprintf(dir, sizeof dir, "%.*s/", (int)(slash - drv), drv) < sizeof dir)
+                lib = adrenotools_open_libvulkan(RTLD_NOW | RTLD_LOCAL, ADRENOTOOLS_DRIVER_CUSTOM, NULL, hooks, dir, slash + 1,
+                                                 NULL, NULL);
+            LOG("[vk] driver %s: %s\n", drv, lib ? "loaded through adrenotools" : "FAILED, using the system driver");
+            PFN_vkGetInstanceProcAddr g = lib ? (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr") : NULL;
+            if (lib && (!g || !driver_has_gpu(g))) {
+                LOG("[vk] driver %s: no Vulkan 1.1+ GPU it supports here - using the system driver\n", drv);
+                lib = NULL;  // (left loaded: a driver doesn't always unload cleanly)
+            }
+            if (!lib) {  // (the package's name: its folder, files/drivers/<name>/<library>)
+                const char *name = drv;
+                if (slash) {
+                    const char *p = slash;
+                    while (p > drv && p[-1] != '/') p--;
+                    name = p;
+                }
+                snprintf(g_rejected, sizeof g_rejected, "%.*s", slash && name < slash ? (int)(slash - name) : (int)strlen(name), name);
+            }
         }
     }
     if (!lib) lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
