@@ -6767,9 +6767,19 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
 static void debug_draw(Prog *pr, CmdRec *r, bool indexed);
 
 // Quads / fans / polygons as a 32-bit triangle index list.
+// (Phase 1, optimization n°7: the list is transient - the caller copies it into the ring right after - so it comes
+// from one reusable scratch instead of a malloc/munmap per draw)
 static uint32_t *expand_indices(uint32_t mode, uint32_t count, const void *indices, int itype, uint32_t first, uint32_t *out_count) {
     uint32_t tris = mode == 7 ? count / 4 * 2 : count >= 3 ? count - 2 : 0;
-    uint32_t *out = malloc(tris * 3 * 4 + 4);
+    uint32_t need = tris * 3 + 1;  // (words: the triangles, +1 slack)
+    static uint32_t *buf;
+    static uint32_t cap;
+    if (!buf || need > cap) {  // (grow once: the largest draw's list becomes the scratch)
+        free(buf);
+        buf = malloc(need * 4);
+        cap = need;
+    }
+    uint32_t *out = buf;
     uint32_t n = 0;
 #define IDX(i) (indices ? (itype == 0 ? ((const uint8_t *)indices)[i] : itype == 1 ? ((const uint16_t *)indices)[i] : ((const uint32_t *)indices)[i]) : first + (i))
     if (mode == 7) {
@@ -7615,8 +7625,7 @@ static void draw_(CmdRec *r, bool indexed) {
         max_index = first + count;
         if (!native) {
             uint32_t *e = expand_indices(mode, count, NULL, 0, first, &icount);
-            ib = vk_transient_copy(e, (uint64_t)icount * 4 + 4, 4);
-            free(e);
+            ib = vk_transient_copy(e, (uint64_t)icount * 4 + 4, 4);  // (the scratch is reused: no free)
         }
     } else {
         uint32_t itype = (uint32_t)r->x[1];
@@ -7658,7 +7667,6 @@ static void draw_(CmdRec *r, bool indexed) {
             uint32_t *e = expand_indices(mode, count, src, (int)itype, 0, &icount);
             for (uint32_t i = 0; i < icount; i++) if (e[i] > max_index) max_index = e[i];
             ib = vk_transient_copy(e, (uint64_t)icount * 4 + 4, 4);
-            free(e);
         }
         if (!scan_src) {
             max_index += 1;
