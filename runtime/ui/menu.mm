@@ -697,6 +697,20 @@ static void tab_display(void) {
                "(Android status SEVERE or headroom forecast). Performance: holds the chosen frame rate while hot, "
                "no app-level drop. Balanced: only the Android thermal status triggers a drop, not the headroom forecast. "
                "Applies at once.");
+    opt_toggle("Mode Turbo Mali-G720", &g_settings.turbo_mali, false,
+               "Turbo mode for Mali-G720 / Immortalis Gen4: forces maximum GPU clocks, disables driver thermal throttling, "
+               "enables all Mali-G720 specific optimizations (VK_EXT_external_memory_host, VK_KHR_map_memory_placed, "
+               "aggressive shader compilation, maximum VRAM budget). Requires Mali-G720 / Immortalis Gen4. "
+               "May increase power consumption and heat. Applies at next game start.");
+    opt_toggle("Compilation de shaders asynchrone", &g_settings.async_shader_compile, true,
+               "Asynchronous shader compilation: compiles shaders on background threads while the game runs, "
+               "reducing stutter on first use of new materials. Uses dedicated worker threads. "
+               "On by default for Mali-G720. Applies at once.");
+    opt_toggle("Accélération matérielle ASTC", &g_settings.astc_hw_accel, true,
+               "ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback. "
+               "On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths, "
+               "significantly reducing texture upload times and memory bandwidth. "
+               "On by default for Mali-G720. Applies at next game start; restart the app for all textures.");
 #endif
     opt_end();
 }

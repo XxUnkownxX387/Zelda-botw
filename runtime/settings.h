@@ -73,6 +73,13 @@ typedef struct {
     int thermal_perf;    // Dimensity: the thermal performance mode - 0 Auto (the thermal cap: 30 fps while hot), 1 Performance (the
                          // mode holds the chosen rate while hot), 2 Balanced (the drop from the thermal status only, not the
                          // headroom forecast).
+    bool turbo_mali;     // Mali-G720: Turbo mode - forces max GPU clocks, disables thermal throttling in driver, enables
+                         // all Mali-G720 specific optimizations (VK_EXT_external_memory_host, VK_KHR_map_memory_placed,
+                         // aggressive shader compilation, max VRAM budget). Requires Mali-G720 / Immortalis Gen4.
+    bool async_shader_compile;  // Async shader compilation: compiles shaders on background threads while game runs,
+                                // reduces stutter on first use. On by default on Mali-G720.
+    bool astc_hw_accel;  // ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback.
+                         // On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths.
     // Driver compatibility (the start screen's Settings > Prelaunch, ui/launcher.mm; from LASRecompAndroid), for GPUs
     // where a Turnip path draws wrong: read when the game starts (gpu_heap, inplace_reads) or when the app starts
     // (turnip_lrz, log_file). -1 Automatic: on for the Adreno 8xx GPUs these paths were made on, off elsewhere

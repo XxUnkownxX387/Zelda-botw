@@ -71,6 +71,9 @@ Settings g_settings = {
     .vrs_mali = true,       // (Mali-G720 / Immortalis Gen4: the VK_KHR_fragment_shading_rate 2x2 on the post passes)
     .afbc_advanced = true,  // (the Mali's advanced AFBC compression)
     .thermal_perf = 0,      // (0: Auto - the thermal cap; 1: Performance - no app-level drop; 2: Balanced - status only)
+    .turbo_mali = false,    // (Mali-G720 Turbo mode: off by default, user must enable explicitly)
+    .async_shader_compile = true,  // (Async shader compilation: on by default for Mali-G720)
+    .astc_hw_accel = true,  // (ASTC hardware acceleration: on by default for Mali-G720)
 #else
     .show_fps = false,
 #endif
@@ -251,6 +254,9 @@ void settings_reset_defaults(void) {
     g_settings.vrs_mali = d->vrs_mali;
     g_settings.afbc_advanced = d->afbc_advanced;
     g_settings.thermal_perf = d->thermal_perf;
+    g_settings.turbo_mali = d->turbo_mali;
+    g_settings.async_shader_compile = d->async_shader_compile;
+    g_settings.astc_hw_accel = d->astc_hw_accel;
 #endif
 }
 
@@ -316,6 +322,10 @@ void settings_load(void) {
         else if (!strcmp(key, "mali_host_import")) g_settings.mali_host_import = atoi(val);
         else if (!strcmp(key, "vrs_mali")) g_settings.vrs_mali = atoi(val) != 0;
         else if (!strcmp(key, "afbc_advanced")) g_settings.afbc_advanced = atoi(val) != 0;
+        else if (!strcmp(key, "thermal_perf")) g_settings.thermal_perf = atoi(val) >= 0 && atoi(val) <= 2 ? atoi(val) : 0;
+        else if (!strcmp(key, "turbo_mali")) g_settings.turbo_mali = atoi(val) != 0;
+        else if (!strcmp(key, "async_shader_compile")) g_settings.async_shader_compile = atoi(val) != 0;
+        else if (!strcmp(key, "astc_hw_accel")) g_settings.astc_hw_accel = atoi(val) != 0;
         else if (!strcmp(key, "overlay_scale")) g_settings.overlay_scale = atoi(val);
         else if (!strcmp(key, "overlay_opacity")) g_settings.overlay_opacity = atoi(val);
         else if (!strcmp(key, "overlay_items")) g_settings.overlay_items = atoi(val);
@@ -485,6 +495,10 @@ void settings_save(void) {
     fprintf(f, "mali_host_import = %d\n", g_settings.mali_host_import);
     fprintf(f, "vrs_mali = %d\n", g_settings.vrs_mali);
     fprintf(f, "afbc_advanced = %d\n", g_settings.afbc_advanced);
+    fprintf(f, "thermal_perf = %d\n", g_settings.thermal_perf);
+    fprintf(f, "turbo_mali = %d\n", g_settings.turbo_mali);
+    fprintf(f, "async_shader_compile = %d\n", g_settings.async_shader_compile);
+    fprintf(f, "astc_hw_accel = %d\n", g_settings.astc_hw_accel);
     fprintf(f, "overlay_scale = %d\n", g_settings.overlay_scale);
     fprintf(f, "overlay_opacity = %d\n", g_settings.overlay_opacity);
     fprintf(f, "overlay_items = %d\n", g_settings.overlay_items);
