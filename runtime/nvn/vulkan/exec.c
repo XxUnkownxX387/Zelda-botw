@@ -8361,6 +8361,13 @@ static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *src
     VkRect2D sc = {{0, 0}, {dst->width, dst->height}};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
+    if (g_vk.fragment_shading_rate) {  // (VK_KHR_fragment_shading_rate: 2x2 reduced shading rate on the post pass - the Mali-G720
+        // has the extension and its driver supports it; the secondary post-processing passes are the shadered ones)
+        VkExtent2D fsr = {.width = 2, .height = 2};
+        VkFragmentShadingRateCombinerOpKHR fc[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
+                                                  VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR};
+        vkCmdSetFragmentShadingRateKHR(cb, &fsr, fc);
+    }
     vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
     ss.known &= ~SS_SETS;  // (another layout: the draws' sets are bound again)
     vkCmdDraw(cb, 3, 1, 0, 0);

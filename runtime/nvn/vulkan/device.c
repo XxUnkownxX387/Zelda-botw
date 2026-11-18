@@ -493,7 +493,19 @@ static void create_device(void) {
     const char *ext[32];
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    // VK_KHR_fragment_shading_rate: a reduced fragment shading rate (2x2 on the post-processing passes - exec.c
+    // post_pass). Mali (r49p1 and up, the G720 among them) lists the extension; ask for it with its feature.
 #ifdef __ANDROID__
+    {
+        VkPhysicalDeviceFragmentShadingRateFeaturesKHR q_fsr = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+        if (has_ext(ep, ne, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)) {
+            VkPhysicalDeviceFeatures2 f_fsr = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &q_fsr};
+            vkGetPhysicalDeviceFeatures2(g_vk.phys, &f_fsr);
+            g_vk.fragment_shading_rate = q_fsr.pipelineFragmentShadingRate;
+            if (g_vk.fragment_shading_rate) ext[n_ext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME;
+        }
+    }
     // (below 1.3: pick_device checked the required ones are there; an optional group goes in only whole - dynamic
     // rendering's three, for one). Test switches, each that group's other way on any driver (below 1.3 also as if its
     // extensions were missing, as on Mali's): LARECOMP_NO_DYNAMIC_RENDERING=1, LARECOMP_NO_SYNC2=1, LARECOMP_NO_EDS=1
@@ -911,6 +923,9 @@ static void create_device(void) {
     VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pex = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR, .pipelineExecutableInfo = VK_TRUE};
     if (g_vk.exec_stats) { pex.pNext = f.pNext; f.pNext = &pex; }
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR f_fsr = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR, .pipelineFragmentShadingRate = VK_TRUE};
+    if (g_vk.fragment_shading_rate) { f_fsr.pNext = f.pNext; f.pNext = &f_fsr; LOG("[vk-cap] fragment shading rate on\n"); }
 #endif
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = g_vk.qfam,
