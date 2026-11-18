@@ -1283,9 +1283,18 @@ static void run_job(void (*fn)(void *), void *arg) {
         int cores = SDL_GetNumLogicalCPUCores();
         int n = cores - 4;
 #ifdef __ANDROID__
-        n = (cores > 6) ? (cores - 4) : 2;
-        if (n < 2) n = 2;
-        if (n > 4) n = 4;  // leave CPU capacity for the game and Vulkan translation
+        // Mali-G720 (Dimensity 8400-Ultra): 8 cores, shader compilation is heavier on Mali driver
+        // Use more worker threads for Mali to parallelize the heavier compilation workload
+        bool is_mali = strstr(g_settings.gpu_model, "Mali") || strstr(g_settings.gpu_model, "Immortalis");
+        if (is_mali) {
+            n = (cores > 4) ? (cores - 2) : 2;  // Mali: keep 2 cores for game, rest for shader workers
+            if (n < 3) n = 3;
+            if (n > 6) n = 6;  // Mali benefits from more parallel compilation
+        } else {
+            n = (cores > 6) ? (cores - 4) : 2;
+            if (n < 2) n = 2;
+            if (n > 4) n = 4;  // leave CPU capacity for the game and Vulkan translation
+        }
         // Env override
         const char *workers = getenv("LARECOMP_SHADER_WORKERS");
         if (workers) n = atoi(workers);

@@ -822,6 +822,7 @@ static void create_device(void) {
 #ifdef __ANDROID__
     {   // Adreno has no uniformAndStorageBuffer8BitAccess, and no shader uses 8-bit uniform buffers
         // (docs/las/ANDROID-PORT.md, Fase 0): the 8-bit features only when the driver has them
+        f12.shaderFloat16 = h12.shaderFloat16;
         f12.shaderInt8 = h12.shaderInt8;
         f12.uniformAndStorageBuffer8BitAccess = h12.uniformAndStorageBuffer8BitAccess;
         f12.storageBuffer8BitAccess = h12.storageBuffer8BitAccess;
@@ -854,7 +855,7 @@ static void create_device(void) {
     VkPhysicalDeviceTimelineSemaphoreFeatures e_tl = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
                                                       .timelineSemaphore = VK_TRUE};
     VkPhysicalDeviceShaderFloat16Int8Features e_i8 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
-                                                      .shaderInt8 = h12.shaderInt8, .pNext = &e_tl};
+                                                      .shaderFloat16 = VK_TRUE, .shaderInt8 = h12.shaderInt8, .pNext = &e_tl};
     VkPhysicalDevice8BitStorageFeatures e_b8 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES,
                                                 .storageBuffer8BitAccess = h12.storageBuffer8BitAccess,
                                                 .uniformAndStorageBuffer8BitAccess = h12.uniformAndStorageBuffer8BitAccess,
@@ -935,6 +936,11 @@ static void create_device(void) {
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR f_fsr = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR, .pipelineFragmentShadingRate = VK_TRUE};
     if (g_vk.fragment_shading_rate) { f_fsr.pNext = f.pNext; f.pNext = &f_fsr; LOG("[vk-cap] fragment shading rate on\n"); }
+    // VK_EXT_attachment_feedback_loop_layout: allows sampling a render target while it's being written (feedback loop)
+    // Turnip (Adreno 8xx) and Mali (r54p1+) support this - enables in-place feedback reads, avoiding fbcopy snapshots.
+    VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT f_fbl = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT};
+    if (g_vk.feedback_loop_layout) { f_fbl.pNext = f.pNext; f.pNext = &f_fbl; LOG("[vk-cap] attachment feedback loop layout on\n"); }
     // Immortalis Gen4 / Mali-G720 (ARM Mali 5th Gen, Dimensity 8400-Ultra): the architecture's own features - VRS through
     // VK_KHR_fragment_shading_rate (driver r49p1) and deferred vertex shading (DVS) with it. On that architecture the
     // post passes' non-critical secondary passes then run at a reduced shading rate (exec.c post_pass).
