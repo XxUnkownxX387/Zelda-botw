@@ -106,6 +106,8 @@ bool framepace_in_event(void) { return g_game_version >= 182 && in_event(); }  /
 // ahead at 1.0 or more (throttling ahead) -> 30 fps; back after 30 readings in a row below both (status under SEVERE,
 // headroom under 0.9), a gap of over 2 s between readings starting the count again. Only 60 and 40 / 45 fps modes:
 // the others are 30 or less already, or the game's own choice. LARECOMP_THERMAL_CAP=1 / 0 over the setting.
+// thermal_perf (Video > Mode performance thermique): 0 Auto (cap), 1 Performance (no app-level drop),
+// 2 Balanced (status only, not headroom forecast).
 static volatile int g_thermal_hot;  // (1: capped now)
 static int thermal_cap_on(void) {
     static int env = -2;
@@ -131,19 +133,35 @@ void framepace_thermal_sample(int thermal, float headroom) {
         double s = (now - t0) / 1e9;
         if (from >= 0 && s >= from && s < to) thermal = 3;
     }
-    bool hot = thermal >= 3 || headroom >= 1.0f;
-    bool cold = thermal >= 0 && thermal < 3 && (headroom < 0 || headroom < 0.9f);
+    // thermal_perf: 0=Auto (status + headroom), 1=Performance (no cap), 2=Balanced (status only)
+    int perf_mode = g_settings.thermal_perf;
+    bool hot = false;
+    if (perf_mode == 1) {
+        hot = false;  // Performance: never cap at app level
+    } else if (perf_mode == 2) {
+        hot = thermal >= 3;  // Balanced: only status SEVERE+, ignore headroom
+    } else {
+        hot = thermal >= 3 || headroom >= 1.0f;  // Auto: status + headroom forecast
+    }
+    bool cold;
+    if (perf_mode == 1) {
+        cold = true;  // Performance: always cool immediately
+    } else if (perf_mode == 2) {
+        cold = thermal >= 0 && thermal < 3;  // Balanced: cool when status < SEVERE
+    } else {
+        cold = thermal >= 0 && thermal < 3 && (headroom < 0 || headroom < 0.9f);  // Auto: status < SEVERE + headroom < 0.9
+    }
     if (gap) cool = 0;
     if (hot) {
         cool = 0;
         if (!g_thermal_hot) {
             g_thermal_hot = 1;
-            LOG("[framepace] the phone is too hot (thermal status %d, headroom %.2f): 30 fps until it cools%s\n", thermal,
-                headroom, thermal_cap_on() ? "" : " (cap off in the settings: not applied)");
+            LOG("[framepace] the phone is too hot (thermal status %d, headroom %.2f, perf_mode %d): 30 fps until it cools%s\n", thermal,
+                headroom, perf_mode, thermal_cap_on() ? "" : " (cap off in the settings: not applied)");
         }
     } else if (cold && g_thermal_hot && ++cool >= 30) {
         g_thermal_hot = 0, cool = 0;
-        LOG("[framepace] the phone has cooled (thermal status %d, headroom %.2f): the chosen frame rate again\n", thermal, headroom);
+        LOG("[framepace] the phone has cooled (thermal status %d, headroom %.2f, perf_mode %d): the chosen frame rate again\n", thermal, headroom, perf_mode);
     }
 }
 int fps_mode_now(void) {
