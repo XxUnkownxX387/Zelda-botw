@@ -3320,7 +3320,9 @@ static bool warmup_load(void) {
     
     pthread_mutex_lock(&warmup_lock);
     if (g_warmup_keys) free(g_warmup_keys);
-    g_warmup_keys = malloc(hdr.count * WARMUP_KEY_SIZE);
+    // (the in-memory list holds up to WARMUP_MAX_KEYS: the loaded count is only its starting fill, so the buffer
+    //  must be full-capacity or warmup_add_key's appends run past its end once the gameplay adds new keys)
+    g_warmup_keys = malloc(WARMUP_MAX_KEYS * WARMUP_KEY_SIZE);
     if (!g_warmup_keys) {
         pthread_mutex_unlock(&warmup_lock);
         fclose(f);
@@ -3414,6 +3416,7 @@ void warmup_add_key(const PipeKey *key, uint64_t vs_hash, uint64_t fs_hash) {
     }
     
     WarmupKey *wk = &g_warmup_keys[g_warmup_count];
+    LOG("[warmup] add_key: write WarmupKey at index %d (capacity %d, size %zu)\n", g_warmup_count, WARMUP_MAX_KEYS, sizeof(WarmupKey));
     wk->k = *key;
     wk->vs_hash = vs_hash;
     wk->fs_hash = fs_hash;
