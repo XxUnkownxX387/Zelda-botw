@@ -110,6 +110,7 @@ static pthread_mutex_t seq_lock = PTHREAD_MUTEX_INITIALIZER;
 static bool in_pass;
 static uint32_t pass_written;  // (the attachments this pass's draws wrote so far: draw_writes)
 static uint32_t pass_dup_null;  // (color slots left unbound: their image is bound in another slot - begin_pass)
+static bool pass_stored;  // (the pass being recorded stored to a target / gmem since the last barrier: the next pass waits)
 static const void *g_cur_rec;   // (exec_list: the record being run)
 static struct { const void *rec; uint32_t aspects; } lclear[16];  // (clears the pass's load operations did: begin_pass)
 static int nlclear;
@@ -128,6 +129,7 @@ static pthread_mutex_t wait_tab_lock = PTHREAD_MUTEX_INITIALIZER;
 static void wait_account(uint64_t ns) {
     const char *why = wait_why ? wait_why : "other";
     wait_why = NULL;
+    if (prof <= 0) return;  // (Optimization n°6: the wait breakdown is only collected when profiling)
     pthread_mutex_lock(&wait_tab_lock);
     for (int i = 0; i < 12; i++)
         if (!wait_tab[i].why || wait_tab[i].why == why) { wait_tab[i].why = why; wait_tab[i].ns += ns; wait_tab[i].n++; break; }
@@ -154,7 +156,10 @@ void vk_wait_seq(uint64_t seq) {
     VkSemaphoreWaitInfo wi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1, .pSemaphores = &g_vk.timeline,
                               .pValues = &seq};
     uint64_t t0 = SDL_GetTicksNS();
-    VkResult r = vkWaitSemaphores(g_vk.dev, &wi, 10ull * 1000000000ull);
+    // (Optimization n°5: the awaited sequence may already be retired - the timeline's counter - skip the wait)
+    uint64_t sem_v = 0;
+    VkResult qr = vkGetSemaphoreCounterValue(g_vk.dev, g_vk.timeline, &sem_v);
+    VkResult r = qr == VK_SUCCESS && sem_v >= seq ? VK_SUCCESS : vkWaitSemaphores(g_vk.dev, &wi, 10ull * 1000000000ull);
     stat_wait_ns += SDL_GetTicksNS() - t0;
     cum_wait += SDL_GetTicksNS() - t0;
     wait_account(SDL_GetTicksNS() - t0);
@@ -2047,6 +2052,7 @@ static VkRect2D scissor_rect(void);
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
     pipeline_dirty = true;
+    bool restart = in_pass && st.rt_dirty;  // (a pass that changes its render targets restarts)
     vk_end_pass();
     if (st.rt.depth && st.rt.ncolor >= 3 && st.rt.color[0] && vk_texture_scale_group(st.rt.color[0]) == RS_SCENE) {
         g_scene_frame = renderer_present_count();
@@ -2088,7 +2094,11 @@ static void begin_pass(void) {
     static int no_barrier = -1;  // (LARECOMP_VK_NO_PASS_BARRIER=1: none - unsafe, a measurement of what it costs)
     if (no_barrier < 0) no_barrier = getenv("LARECOMP_VK_NO_PASS_BARRIER") != NULL;
     extern int vk_ab(const char *what);
-    if (!no_barrier && AB("nobarrier") != 1) vk_full_barrier(cb);  // passes, copies and dispatches see each other's results
+    bool need_barrier = true;
+    if (no_barrier) need_barrier = false;
+    else if (AB("nobarrier") != 1) need_barrier = restart || pass_stored;
+    if (need_barrier) vk_full_barrier(cb);  // passes, copies and dispatches see each other's results
+    pass_stored = false;  // (a new pass starts: the previous pass's stores are now accounted for)
     {
         NvnTexture *t0n = st.rt.ncolor ? st.rt.color[0] : NULL;
         dl_note("pass %d color %ux%u fmt %#x depth %p", st.rt.ncolor, t0n ? t0n->width : 0, t0n ? t0n->height : 0, t0n ? t0n->format : 0,
@@ -2546,7 +2556,7 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
         VkImageAspectFlags dsa = (depth && pass_depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) | (stencil && pass_stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
         if (dsa) a[n++] = (VkClearAttachment){.aspectMask = dsa, .clearValue.depthStencil = {dval, sval}};
         VkClearRect cr = {rect, 0, 1};
-        if (n) vkCmdClearAttachments(cb, n, a, 1, &cr);
+        if (n) { vkCmdClearAttachments(cb, n, a, 1, &cr); pass_stored = true; }
         return;
     }
     VkPipeline p = clear_pipeline(index, kind, mask, depth, stencil);
@@ -2572,6 +2582,7 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
     pc[4] = dval;
     vkCmdPushConstants(cb, pc_layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
     ss.known &= ~SS_SETS;  // (another layout: the draws' sets are bound again)
+    pass_stored = true;  // (the clear is a GPU write: the next pass waits for it)
     vkCmdDraw(cb, 3, 1, 0, 0);
 }
 
@@ -3960,6 +3971,7 @@ static void alias_copy(CopyAlias *a, VkImageAspectFlags aspects, const char *why
     gp_mark(cb, "copy texture (deferred, %s%s) %ux%u", why, aspects == d->aspect ? "" : ", stencil only", a->dst->width, a->dst->height);
     VkImageCopy c = {.srcSubresource = {aspects, 0, 0, 1}, .dstSubresource = {aspects, 0, 0, 1}, .extent = {d->width, d->height, 1}};
     vkCmdCopyImage(cb, s->image, VK_IMAGE_LAYOUT_GENERAL, d->image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+    pass_stored = true;  // (the alias's copy writes the destination: the next pass waits for it)
     if (aspects == d->aspect) stat_alias_copied++; else stat_alias_partial++;
     if (ct_on()) LOG("[ct] alias copy %p -> %p aspects %#x (%s)\n", (void *)a->src, (void *)a->dst, aspects, why);
 }
@@ -4171,6 +4183,7 @@ static void resolve_feedback(Prog *pr, uint32_t draw_written) {
             TexBackend *dst = snapshot_image(t, src);
             VkCommandBuffer cb = vk_cmd();
             vk_full_barrier(cb);
+            pass_stored = true;  // (the snapshot's copy writes the source's aspects: the next pass waits for it)
             gp_mark(cb, "feedback snapshot %ux%u fmt %d", src->width, src->height, src->format);
             for (uint32_t lv = 0; lv < dst->levels; lv++) {
                 uint32_t w = src->width >> lv, h = src->height >> lv;
@@ -6713,7 +6726,8 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     VkCommandBuffer cb = vk_cmd();
     bool chained = dchain && cb == dchain_cb && dchain_ok();
     if (chained) stat_dchained++;
-    else vk_full_barrier(cb);
+    // (a dispatch that does not access global memory owes no memory barrier: nothing to order since the last one)
+    else if (pass_stored && cp->si->uses_gmem) vk_full_barrier(cb);
     dchain = false;
     dchain_after = false;
     gp_mark(cb, "dispatch %ux%ux%u (local %ux%ux%u) cs %llx gmem %d", gx, gy, gz, cp->local[0], cp->local[1], cp->local[2],
@@ -6738,7 +6752,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cp->p.layout, 0, 1, &ds, 0, NULL);
     vkCmdDispatch(cb, gx, gy, gz);
     if (cp->si->uses_gmem_map && cp->si->uses_gmem_store) gfast_finish(cb);
-    if (cp->si->uses_gmem_store) vc_mark_sbufs(5), note_gmem_store(5);
+    if (cp->si->uses_gmem_store) { vc_mark_sbufs(5); note_gmem_store(5); pass_stored = true; }  // (the store: the next pass waits for it)
     stat_dispatches++;
 #ifdef __ANDROID__
     dchain = !gcopy_mode && !gfast_n;  // (a copy mode's ranges go through gfast_buf: those keep their barriers)
@@ -7715,6 +7729,7 @@ static void draw_(CmdRec *r, bool indexed) {
     else vkCmdDrawIndexed(cb, icount, inst, 0, base_vertex, base_inst);
     if (g_debug_frame) pick_after_draw();
     pass_written |= draw_w;
+    if (draw_w) pass_stored = true;  // (the pass stored: the next pass waits for it - a pass that only reads owes no barrier)
     stat_draws++;
     cum_draws++;
     if (g_gpuprof_frame && gp_n) {
@@ -8925,10 +8940,10 @@ static void exec_list(uint64_t handle, int depth) {
             }
             break;
         }
-        case CMD_COPY_TEXTURE_TO_TEXTURE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], r->x[6]); break; }
-        case CMD_DOWNSAMPLE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], 1); break; }
-        case CMD_COPY_BUFFER_TO_TEXTURE: copy_buffer_to_texture(r->x[0], x); break;
-        case CMD_COPY_TEXTURE_TO_BUFFER: copy_texture_to_buffer(x, r->x[3]); break;
+        case CMD_COPY_TEXTURE_TO_TEXTURE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], r->x[6]); pass_stored = true; break; }
+        case CMD_DOWNSAMPLE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], 1); pass_stored = true; break; }
+        case CMD_COPY_BUFFER_TO_TEXTURE: copy_buffer_to_texture(r->x[0], x); pass_stored = true; break;
+        case CMD_COPY_TEXTURE_TO_BUFFER: copy_texture_to_buffer(x, r->x[3]); pass_stored = true; break;
         case CMD_COPY_BUFFER_TO_BUFFER:
             wait_why = "buffer -> buffer copy";
             {   // LARECOMP_LOG_BUFCOPY=1: the first 30 (where in the frame, how large: each waits for the GPU here)
