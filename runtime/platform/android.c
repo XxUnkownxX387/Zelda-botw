@@ -792,6 +792,11 @@ static uint64_t read_u64(const char *path) {
 static char g_policy[8][96];
 static int g_npolicy = -1;
 static char g_tzone[96];  // a readable SoC / CPU temperature (most aren't readable by apps)
+// Mali GPU paths (for Mali-G720 etc.): utilization and frequency
+static char g_mali_util_path[96];
+static char g_mali_freq_path[96];
+static char g_mali_max_freq_path[96];
+static int g_mali_found = -1;  // -1 = not checked, 0 = not found, 1 = found
 
 static void find_sources(void) {
     if (g_npolicy >= 0) return;
@@ -823,6 +828,42 @@ static void find_sources(void) {
         if (!v || v > 200000) continue;
         int score = strstr(type, "cpu") ? 3 : strstr(type, "soc") || strstr(type, "aoss") ? 2 : 1;
         if (score > best) { best = score; snprintf(g_tzone, sizeof g_tzone, "%s", path); }
+    }
+    // Mali GPU paths (for Mali-G720 etc.): check common locations
+    if (g_mali_found < 0) {
+        g_mali_found = 0;
+        // Common Mali GPU utilization paths
+        const char *util_paths[] = {
+            "/sys/class/misc/mali0/device/gpu_utilization",
+            "/sys/class/misc/mali0/gpu_utilization",
+            "/sys/class/devfreq/mali0/gpu_utilization",
+            "/sys/class/gpu/mali0/gpu_utilization",
+        };
+        const char *freq_paths[] = {
+            "/sys/class/misc/mali0/device/gpu_freq",
+            "/sys/class/misc/mali0/gpu_freq",
+            "/sys/class/devfreq/mali0/cur_freq",
+            "/sys/class/gpu/mali0/gpu_freq",
+        };
+        const char *max_freq_paths[] = {
+            "/sys/class/misc/mali0/device/max_gpu_freq",
+            "/sys/class/misc/mali0/max_gpu_freq",
+            "/sys/class/devfreq/mali0/max_freq",
+            "/sys/class/gpu/mali0/max_gpu_freq",
+        };
+        for (int i = 0; i < 4 && !g_mali_found; i++) {
+            if (read_u64(util_paths[i]) >= 0) {  // path exists and readable
+                snprintf(g_mali_util_path, sizeof g_mali_util_path, "%s", util_paths[i]);
+                snprintf(g_mali_freq_path, sizeof g_mali_freq_path, "%s", freq_paths[i]);
+                snprintf(g_mali_max_freq_path, sizeof g_mali_max_freq_path, "%s", max_freq_paths[i]);
+                g_mali_found = 1;
+                fprintf(stderr, "[perf] Mali GPU found: util=%s, freq=%s, max_freq=%s\n",
+                        g_mali_util_path, g_mali_freq_path, g_mali_max_freq_path);
+            }
+        }
+        if (!g_mali_found) {
+            fprintf(stderr, "[perf] Mali GPU not found (no readable utilization/freq paths)\n");
+        }
     }
     fprintf(stderr, "[perf] %d CPU clusters, temperature from %s\n", g_npolicy, g_tzone[0] ? g_tzone : "(none readable)");
 }
@@ -864,6 +905,18 @@ void plat_device_stats(PlatDeviceStats *out) {
         char line[256];
         while (fgets(line, sizeof line, f)) if (!strncmp(line, "MemAvailable:", 13)) out->avail_mb = (uint32_t)(atoll(line + 13) / 1024);
         fclose(f);
+    }
+    // Mali GPU stats (utilization and frequency)
+    out->gpu_util_pct = -1;
+    out->gpu_freq_mhz = -1;
+    out->gpu_max_mhz = -1;
+    if (g_mali_found == 1) {
+        uint64_t util = read_u64(g_mali_util_path);
+        if (util > 0) out->gpu_util_pct = (int)util;  // percentage
+        uint64_t freq = read_u64(g_mali_freq_path);
+        if (freq > 0) out->gpu_freq_mhz = (int)(freq / 1000);  // convert Hz to MHz
+        uint64_t max_freq = read_u64(g_mali_max_freq_path);
+        if (max_freq > 0) out->gpu_max_mhz = (int)(max_freq / 1000);  // convert Hz to MHz
     }
 }
 

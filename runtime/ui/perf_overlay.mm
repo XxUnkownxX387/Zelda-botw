@@ -88,6 +88,10 @@ void perf_overlay_draw(ImVec2 display, float scale) {
         ImGui::TextColored(grade(fps, 55, 28), "FPS %.0f", fps);
         ImGui::SameLine();
         ImGui::Text("  RAM %u MB", ds.rss_mb);
+        if (ds.gpu_util_pct >= 0) {
+            ImGui::SameLine();
+            ImGui::TextColored(grade(ds.gpu_util_pct, 90, 50), "Mali %d%%", ds.gpu_util_pct);
+        }
         if (ds.soc_temp_c > 0) {
             ImGui::SameLine();
             ImGui::TextColored(grade(100 - ds.soc_temp_c, 35, 20), "  SoC %.0f\xc2\xb0" "C", ds.soc_temp_c);
@@ -145,6 +149,14 @@ void perf_overlay_draw(ImVec2 display, float scale) {
     }
     ImGui::Text("GPU %s", vk_gpu_desc());
     ImGui::TextColored(grade(100 - wait_pct, 50, 20), "    waiting on the GPU %.0f%%", wait_pct);
+    // Mali GPU utilization and frequency (if available)
+    if (ds.gpu_util_pct >= 0) {
+        ImGui::TextColored(grade(ds.gpu_util_pct, 90, 50), "Mali GPU %d%%", ds.gpu_util_pct);
+        if (ds.gpu_freq_mhz >= 0 && ds.gpu_max_mhz > 0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%d / %d MHz)", ds.gpu_freq_mhz, ds.gpu_max_mhz);
+        }
+    }
     ImGui::Text("RAM app %u MB", ds.rss_mb);
     ImGui::SameLine();
     ImGui::TextDisabled("free %u MB", ds.avail_mb);

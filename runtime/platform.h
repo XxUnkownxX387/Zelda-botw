@@ -85,6 +85,10 @@ typedef struct {
     int thermal;                   // PowerManager thermal status: 0 none ... 6 shutdown
     float headroom;                // PowerManager thermal headroom (1.0 = throttling begins)
     int plugged;                   // BatteryManager's EXTRA_PLUGGED: 0 on battery, else the charger's kind
+    // Mali GPU stats (Mali-G720 etc.): -1 if not available
+    int gpu_util_pct;              // GPU utilization percentage (0-100)
+    int gpu_freq_mhz;              // current GPU frequency in MHz
+    int gpu_max_mhz;               // maximum GPU frequency in MHz
 } PlatDeviceStats;
 void plat_device_stats(PlatDeviceStats *out);
 // ADPF: the calling thread's work for a frame (busy, ns) and its target (the frame time it must fit)
