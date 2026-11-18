@@ -322,7 +322,6 @@ void settings_load(void) {
         else if (!strcmp(key, "mali_host_import")) g_settings.mali_host_import = atoi(val);
         else if (!strcmp(key, "vrs_mali")) g_settings.vrs_mali = atoi(val) != 0;
         else if (!strcmp(key, "afbc_advanced")) g_settings.afbc_advanced = atoi(val) != 0;
-        else if (!strcmp(key, "thermal_perf")) g_settings.thermal_perf = atoi(val) >= 0 && atoi(val) <= 2 ? atoi(val) : 0;
         else if (!strcmp(key, "turbo_mali")) g_settings.turbo_mali = atoi(val) != 0;
         else if (!strcmp(key, "async_shader_compile")) g_settings.async_shader_compile = atoi(val) != 0;
         else if (!strcmp(key, "astc_hw_accel")) g_settings.astc_hw_accel = atoi(val) != 0;
@@ -477,7 +476,6 @@ void settings_save(void) {
                g_settings.fps_mode == 4 ? "45" : "auto");
     fprintf(f, "framegen = %d\n", g_settings.framegen);
     fprintf(f, "thermal_cap = %d\n", g_settings.thermal_cap);
-    fprintf(f, "thermal_perf = %d\n", g_settings.thermal_perf);
     fprintf(f, "cutscenes_60 = %d\n", g_settings.event_fps_unlock);
     fprintf(f, "shader_int32 = %d\nsync_lag = %d\nnative_code = %d\nfiles_in_place = %d\n", g_settings.shader_int32,
             g_settings.sync_lag, g_settings.native_code, g_settings.files_in_place);

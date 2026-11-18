@@ -343,6 +343,14 @@ static void bc_decode(VkFormat bc, const uint8_t *blocks, uint32_t wb, uint32_t 
             free(astc_out);
         }
     }
+    // If hardware ASTC HDR decoding is available and enabled, log availability
+    if (g_vk.texture_compression_astc_hdr && g_settings.astc_hw_accel) {
+    static int logged = 0;
+    if (!logged) {
+        LOG("[vk] Hardware ASTC HDR decoding available (astc_hw_accel)\n");
+        logged = 1;
+    }
+}
     int pitch = (int)(wb * 4 * bpp);
     for (uint32_t y = 0; y < hb; y++)
         for (uint32_t x = 0; x < wb; x++) {
@@ -603,10 +611,15 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         } else
 #endif
         if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
-            b->astc_bw = fi->bw;
-            b->astc_bh = fi->bh;
-            b->astc_srgb = t->format >= 0x87;
-            vf = b->astc_srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+            // If hardware ASTC HDR decoding is available and enabled, keep ASTC format
+            if (g_vk.texture_compression_astc_hdr && g_settings.astc_hw_accel) {
+                // Keep ASTC format, hardware will decode it
+            } else {
+                b->astc_bw = fi->bw;
+                b->astc_bh = fi->bh;
+                b->astc_srgb = t->format >= 0x87;
+                vf = b->astc_srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+            }
         } else {
             static int nlog;
             if (nlog++ < 20) LOG("[vk] format %d (nvn %#x) not supported: RGBA8 instead\n", vf, t->format);

@@ -698,6 +698,11 @@ static void create_device(void) {
     // Turnip (Adreno 8xx) and Mali (r54p1+) support this - enables in-place feedback reads, avoiding fbcopy snapshots.
     g_vk.feedback_loop_layout = has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
     if (g_vk.feedback_loop_layout) ext[n_ext++] = VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME;
+    // VK_EXT_texture_compression_astc_hdr: hardware ASTC HDR decoding (Mali-G720 etc.)
+    if (g_settings.astc_hw_accel && has_ext(ep, ne, VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME)) {
+        ext[n_ext++] = VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME;
+        LOG("[vk-cap] VK_EXT_texture_compression_astc_hdr enabled (astc_hw_accel setting)\n");
+    }
     // (which ways this driver could export memory at all: a report from a Mali or an Xclipse says what to try next -
     // the option did nothing on a Mali-G720 r49p1 with no word in the log, #249)
     LOG("[vk-cap] memory export: fd %s, dma-buf %s, placed maps %s, host import %s, feedback loop layout %s\n",
@@ -971,6 +976,11 @@ static void create_device(void) {
     VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT f_fbl = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT};
     if (g_vk.feedback_loop_layout) { f_fbl.pNext = f.pNext; f.pNext = &f_fbl; LOG("[vk-cap] attachment feedback loop layout on\n"); }
+    // VK_EXT_texture_compression_astc_hdr: hardware ASTC HDR decoding
+    VkPhysicalDeviceTextureCompressionASTCHDRFeaturesEXT f_astc_hdr = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES_EXT,
+        .textureCompressionASTC_HDR = VK_TRUE};
+    if (g_vk.texture_compression_astc_hdr) { f_astc_hdr.pNext = f.pNext; f.pNext = &f_astc_hdr; LOG("[vk-cap] ASTC HDR compression on\n"); }
     // Immortalis Gen4 / Mali-G720 (ARM Mali 5th Gen, Dimensity 8400-Ultra): the architecture's own features - VRS through
     // VK_KHR_fragment_shading_rate (driver r49p1) and deferred vertex shading (DVS) with it. On that architecture the
     // post passes' non-critical secondary passes then run at a reduced shading rate (exec.c post_pass).

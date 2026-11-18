@@ -1250,7 +1250,12 @@ static void *worker(void *a) {
 
 static bool sync_shaders(void) {
     static int v = -1;
-    if (v < 0) v = getenv("LARECOMP_SYNC_SHADERS") != NULL;
+    if (v < 0) {
+        // Check environment variable first (for testing/overrides)
+        const char *e = getenv("LARECOMP_SYNC_SHADERS");
+        if (e) v = atoi(e) != 0;
+        else v = !g_settings.async_shader_compile;  // async_shader_compile=false means sync
+    }
     return v;
 }
 
