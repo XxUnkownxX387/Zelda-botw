@@ -560,9 +560,31 @@ static void create_device(void) {
     // For Mali-G720 (this log: r49p1) the placed-map path fails (VK_ERROR_OUT_OF_DEVICE_MEMORY on map at HEAP_BASE),
     // but the host import (VK_EXT_external_memory_host) works and avoids CPU copies of ~850 MB/frame.
     // Auto gating: on for Mali GPU generation >= 710, driver version < r54, RAM >= 11 GB.
+    // FOR 12GB+ RAM devices (Xiaomi 15T Mali-G720 MC7): force enable host import and remove conservative limits.
     bool mali = g_vk.props.vendorID == 0x13B5;
     bool xclipse = strstr(g_vk.props.deviceName, "Xclipse") || g_vk.props.vendorID == 0x144D;  // (Samsung)
     bool by_setting = g_settings.gpu_heap == 0 && !vk_driver_is_turnip();
+    
+    // Detect Mali-G720 specifically for optimized settings
+    bool is_mali_g720 = mali && strstr(g_vk.props.deviceName, "Mali-G720");
+    bool is_high_ram = false;
+    {
+        FILE *meminfo = fopen("/proc/meminfo", "r");
+        if (meminfo) {
+            char line[256];
+            while (fgets(line, sizeof line, meminfo)) {
+                if (strncmp(line, "MemTotal:", 9) == 0) {
+                    unsigned long kb = 0;
+                    sscanf(line + 9, "%lu", &kb);
+                    int total_ram_gb = (int)((kb + 1024 * 1024 - 1) / (1024 * 1024));
+                    is_high_ram = (total_ram_gb >= 12);
+                    break;
+                }
+            }
+            fclose(meminfo);
+        }
+    }
+    
     if (g_vk.host_import) {
         const char *e = getenv("LARECOMP_VK_HOST_IMPORT");
         // LARECOMP_VK_HOST_IMPORT=0/1 overrides everything
@@ -610,9 +632,17 @@ static void create_device(void) {
             }
             // Settings override: -1=auto, 0=off, 1=on
             int setting = g_settings.mali_host_import;
-            bool auto_on = (gpu_gen >= 710) && (driver_ver < 54) && (total_ram_gb >= 11);
-            LOG("[vk] Mali host import auto: gpu_gen=%d, driver_ver=r%d, ram=%d GB -> %s\n",
-                gpu_gen, driver_ver, total_ram_gb, auto_on ? "on" : "off");
+            
+            // FOR MALI-G720 ON 12GB+ RAM: Force enable host import, remove conservative gating
+            bool auto_on;
+            if (is_mali_g720 && is_high_ram) {
+                auto_on = true;  // Force enable for Mali-G720 on 12GB+ RAM
+                LOG("[vk] Mali-G720 on 12GB+ RAM detected: FORCING host import ON (optimized for Xiaomi 15T)\n");
+            } else {
+                auto_on = (gpu_gen >= 710) && (driver_ver < 54) && (total_ram_gb >= 11);
+            }
+            LOG("[vk] Mali host import auto: gpu_gen=%d, driver_ver=r%d, ram=%d GB, is_g720=%d, high_ram=%d -> %s\n",
+                gpu_gen, driver_ver, total_ram_gb, is_mali_g720, is_high_ram, auto_on ? "on" : "off");
             if (setting == 1) {
                 g_vk.host_import = true;
             } else if (setting == 0) {
