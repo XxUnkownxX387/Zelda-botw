@@ -82,9 +82,42 @@ static void vram_budget_maybe_evict(uint64_t current_frame) {
     }
 }
 
+// Low-memory watchdog (Mali-G720, 12 GB LPDDR5X): if MemAvailable drops under the threshold,
+// temporarily shrink the VRAM budget by 25% (the next eviction pass then frees textures sooner;
+// the budget is restored as soon as memory is plentiful again).
+static uint64_t g_vram_budget_lowmem_orig = 0;  // original budget while the watchdog is armed
+static int g_vram_budget_lowmem_armed = 0;
+
+static void vram_budget_lowmem_watchdog(void) {
+    if (g_vram_budget_bytes == 0) return;
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return;
+    char line[256];
+    unsigned long avail_kb = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "MemAvailable:", 12) == 0) { sscanf(line + 12, "%lu", &avail_kb); break; }
+    }
+    fclose(f);
+    if (avail_kb == 0) return;  // (read failed: leave the budget untouched)
+    if (avail_kb / 1024 < 1200) {  // MemAvailable < 1200 MB
+        if (!g_vram_budget_lowmem_armed) {
+            g_vram_budget_lowmem_orig = g_vram_budget_bytes;
+            g_vram_budget_bytes -= g_vram_budget_bytes / 4;  // -25%
+            g_vram_budget_lowmem_armed = 1;
+            LOG("[vk] low memory: MemAvailable < 1200 MB -> VRAM budget temporarily reduced by 25%% (%llu MB)\n",
+                (unsigned long long)(g_vram_budget_bytes >> 20));
+        }
+    } else if (g_vram_budget_lowmem_armed) {
+        g_vram_budget_bytes = g_vram_budget_lowmem_orig;
+        g_vram_budget_lowmem_armed = 0;
+        LOG("[vk] low memory cleared: MemAvailable recovered -> VRAM budget restored\n");
+    }
+}
+
 // Called once per frame at present time (on render thread, GPU drained)
-// to evict textures if VRAM budget is exceeded.
+// to evict textures if VRAM budget is exceeded, and to watch the low-memory threshold.
 void vram_budget_evict_if_needed(void) {
+    vram_budget_lowmem_watchdog();
     vram_budget_maybe_evict(renderer_present_count());
 }
 

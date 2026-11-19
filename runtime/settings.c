@@ -430,12 +430,11 @@ void settings_load(void) {
                     // Check for Mali-G720 specifically
                     bool is_mali_g720 = strstr(g_settings.gpu_model, "Mali-G720");
                     
-                    if (is_mali_g720 && total_mb >= 12288) {
-                        // Mali-G720 on 12GB+ RAM (Xiaomi 15T): remove conservative limits, allow full allocation
-                        // Use 50% of total RAM for VRAM budget, up to 6GB
-                        g_settings.max_gpu_mem_mb = (int)(total_mb * 50 / 100);
-                        if (g_settings.max_gpu_mem_mb > 6144) g_settings.max_gpu_mem_mb = 6144;  // cap at 6GB
-                        LOG("[settings] Mali-G720 on 12GB+ RAM detected: VRAM budget set to %d MB (50%% of RAM, no conservative cap)\n",
+                    if (is_mali_g720 && total_mb >= 10500) {
+                        // Mali-G720 on 12GB+ RAM (Xiaomi 15T): VRAM budget = min(35% of MemTotal, 3584 MB)
+                        g_settings.max_gpu_mem_mb = (int)(total_mb * 35 / 100);
+                        if (g_settings.max_gpu_mem_mb > 3584) g_settings.max_gpu_mem_mb = 3584;  // cap at 3584 MB
+                        LOG("[settings] Mali-G720 on 12GB+ RAM: VRAM budget set to %d MB (min(35%% of RAM, 3584 MB))\n",
                             g_settings.max_gpu_mem_mb);
                     } else if (total_mb <= 8192) {
                         // Low RAM: <= 8 GB (8 * 1024 * 1024 KB)
@@ -450,6 +449,7 @@ void settings_load(void) {
             }
         }
     }
+    LOG("[settings] Final VRAM budget: %d MB\n", g_settings.max_gpu_mem_mb);
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
