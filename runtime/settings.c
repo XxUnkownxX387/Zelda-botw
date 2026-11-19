@@ -90,6 +90,7 @@ Settings g_settings = {
                                 // 18.6 at 1080 lines with a larger scene - the final image's passes over 2.2x the pixels)
     .max_gpu_mem_mb = -1,       // (-1 = Auto: Mali with low RAM auto-calculates ~35% of total RAM; 0 = no VRAM limit;
                                // >0 = a fixed VRAM budget in MB)
+    .thermal_dyn_res = false,   // (Auto thermal dynamic resolution: off by default)
 #else
     .upscaler = UPSCALE_SHARP,  // (MetalFX on macOS, AMD FSR 1 on Windows)
 #endif
@@ -266,6 +267,7 @@ void settings_reset_defaults(void) {
     g_settings.adpf_mode = d->adpf_mode;
     g_settings.sustained_perf = d->sustained_perf;
     g_settings.shader_cache = d->shader_cache;
+    g_settings.thermal_dyn_res = d->thermal_dyn_res;
 #endif
 }
 
@@ -340,6 +342,7 @@ void settings_load(void) {
         else if (!strcmp(key, "adpf_mode")) g_settings.adpf_mode = !strcmp(val, "auto") ? -1 : atoi(val);
         else if (!strcmp(key, "sustained_perf")) g_settings.sustained_perf = atoi(val) != 0;
         else if (!strcmp(key, "shader_cache")) g_settings.shader_cache = atoi(val) != 0;
+        else if (!strcmp(key, "thermal_dyn_res")) g_settings.thermal_dyn_res = atoi(val) != 0;
         else if (!strcmp(key, "overlay_scale")) g_settings.overlay_scale = atoi(val);
         else if (!strcmp(key, "overlay_opacity")) g_settings.overlay_opacity = atoi(val);
         else if (!strcmp(key, "overlay_items")) g_settings.overlay_items = atoi(val);
@@ -515,6 +518,7 @@ void settings_save(void) {
     fprintf(f, "adpf_mode = %s\n", g_settings.adpf_mode == -1 ? "auto" : g_settings.adpf_mode ? "1" : "0");
     fprintf(f, "sustained_perf = %d\n", g_settings.sustained_perf);
     fprintf(f, "shader_cache = %d\n", g_settings.shader_cache);
+    fprintf(f, "thermal_dyn_res = %d\n", g_settings.thermal_dyn_res);
     fprintf(f, "overlay_scale = %d\n", g_settings.overlay_scale);
     fprintf(f, "overlay_opacity = %d\n", g_settings.overlay_opacity);
     fprintf(f, "overlay_items = %d\n", g_settings.overlay_items);

@@ -18,6 +18,7 @@
 #include "../settings.h"
 #include "output_scale.h"
 #include "../framepace.h"
+#include "../platform.h"
 
 #define MAX_TEX 16384.0
 #define SCENE_LINES 900.0  // (BOTW's docked 3D scene: 1600x900)
@@ -72,7 +73,76 @@ static void dyn_update(double now, double gpu_ms) {
     }
 }
 
+// Thermal dynamic resolution: reduces render scale based on thermal headroom and GPU frame time.
+// Only active when g_settings.thermal_dyn_res is true and mode is RES_THERMAL_DYNAMIC.
+// Factor range: 0.7 .. 1.0 in 0.05 steps.
+// Lowers scale by 5% if headroom > 0.85 or GPU time exceeds target for 3 consecutive frames.
+// Raises back slowly (one step per ~10s of stability) when headroom < 0.7 and GPU time is under target.
+static double g_thermal_dyn = 1.0;
+static int g_thermal_dyn_over_frames = 0;  // consecutive frames GPU over target
+static double g_thermal_dyn_last_change = 0;
+static double g_thermal_dyn_probe_at = 0;
+
+static void thermal_dyn_update(double now, double gpu_ms) {
+    if (!g_settings.thermal_dyn_res) return;  // disabled by setting
+
+    double dt = g_last_t > 0 ? (now - g_last_t) * 1000.0 : 16.7;
+    g_last_t = now;
+    if (dt > 250) return;  // (loading, menus, a stall: not steady state)
+
+    double want = framepace_on() && framepace_target() > 0 ? 1000.0 / framepace_target() : 1000.0 / 30;
+#ifdef __ANDROID__
+    want = g_settings.fps_mode == 2 || g_settings.fps_mode == 4 ? want : g_settings.fps_mode == 3 ? 1000.0 / 20 : 1000.0 / 30;
+#endif
+
+    // Check thermal headroom (from PowerManager.getThermalHeadroom: 1.0 = throttling begins)
+    float headroom = plat_thermal_headroom();
+    bool thermal_hot = headroom >= 0 && headroom > 0.85f;  // > 0.85 means close to throttling
+
+    // Check GPU frame time
+    bool gpu_over = gpu_ms >= 0 && gpu_ms > want * 1.05;  // 5% over target
+    if (gpu_over) {
+        g_thermal_dyn_over_frames = fmin(g_thermal_dyn_over_frames + 1, 10);
+    } else {
+        g_thermal_dyn_over_frames = fmax(g_thermal_dyn_over_frames - 1, 0);
+    }
+    bool gpu_hot = g_thermal_dyn_over_frames >= 3;  // 3 consecutive frames over target
+
+    // Decide whether to lower or raise
+    double prev = g_thermal_dyn;
+    bool should_lower = thermal_hot || gpu_hot;
+    bool should_raise = !thermal_hot && !gpu_hot && gpu_ms >= 0 && gpu_ms < want * 0.85f;
+
+    // Minimum 10 seconds between changes to avoid oscillation
+    if (now - g_thermal_dyn_last_change < 10.0) {
+        should_lower = false;
+        should_raise = false;
+    }
+
+    if (should_lower) {
+        g_thermal_dyn = fmax(0.7, g_thermal_dyn - 0.05);  // min 70%
+        g_thermal_dyn_last_change = now;
+        g_thermal_dyn_probe_at = now + 15.0;  // wait 15s before considering raise
+        LOG("[thermal-dynres] lowering: %.2f -> %.2f (headroom %.2f, gpu_over_frames %d, gpu_ms %.1f, want %.1f)\n",
+            prev, g_thermal_dyn, headroom, g_thermal_dyn_over_frames, gpu_ms, want);
+    } else if (should_raise && now >= g_thermal_dyn_probe_at && g_thermal_dyn < 1.0) {
+        g_thermal_dyn = fmin(1.0, g_thermal_dyn + 0.05);
+        g_thermal_dyn_last_change = now;
+        g_thermal_dyn_probe_at = now + 15.0;
+        LOG("[thermal-dynres] raising: %.2f -> %.2f (headroom %.2f, gpu_ms %.1f, want %.1f)\n",
+            prev, g_thermal_dyn, headroom, gpu_ms, want);
+    }
+
+    // Round to 0.05 steps
+    g_thermal_dyn = round(g_thermal_dyn * 20) / 20;
+}
+
 double output_scale_dynamic_factor(void) { return g_dyn; }
+
+// Returns the thermal dynamic resolution factor (0.7..1.0), or 1.0 if disabled
+double output_scale_thermal_dynamic_factor(void) {
+    return g_settings.thermal_dyn_res ? g_thermal_dyn : 1.0;
+}
 
 void output_scale(double dw, double dh, bool reshape_allowed, double now, double gpu_ms, OutScale *o) {
     double fit = fmin(dw / 1920.0, dh / 1080.0);
@@ -111,6 +181,7 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
         // smaller - and at most the scene's size in it: 50% on a 1440-line screen stays 720 lines, 75% is 1080)
         double base = out_auto ? h_screen * 1080.0 / SCENE_LINES : hs, share = 1.0;
         if (mode == RES_DYNAMIC) { dyn_update(now, gpu_ms); share = g_dyn; }
+        else if (mode == RES_THERMAL_DYNAMIC) { thermal_dyn_update(now, gpu_ms); share = g_thermal_dyn; }
         else if (mode == RES_Q75) share = 0.75;
         else if (mode == RES_Q25) share = 0.25;
         else if (mode == RES_Q50) share = 0.5;

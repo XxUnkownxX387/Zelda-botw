@@ -124,6 +124,8 @@ void plat_adpf_java_report_frame(int64_t actual_duration_ns);
 void plat_sustained_perf_mode(bool on);
 // Cleanup the Java ADPF session
 void plat_adpf_java_cleanup(void);
+// Get current thermal headroom (PowerManager.getThermalHeadroom, 1.0 = throttling begins, -1 = unknown)
+float plat_thermal_headroom(void);
 #endif
 #endif
 

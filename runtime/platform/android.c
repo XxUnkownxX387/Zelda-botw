@@ -1404,3 +1404,11 @@ void plat_adpf_java_cleanup(void) {
     adpf_java_enabled = false;
     pthread_mutex_unlock(&adpf_java_lock);
 }
+
+// Get current thermal headroom (PowerManager.getThermalHeadroom, 1.0 = throttling begins, -1 = unknown)
+float plat_thermal_headroom(void) {
+    pthread_mutex_lock(&g_ds_lock);
+    float h = g_ds.headroom;
+    pthread_mutex_unlock(&g_ds_lock);
+    return h;
+}

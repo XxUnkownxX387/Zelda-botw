@@ -6,7 +6,8 @@ enum { OVERLAY_FPS = 1, OVERLAY_THROTTLE = 2, OVERLAY_GPU = 4, OVERLAY_CPU = 8, 
 #include <stdbool.h>
 
 enum { ASPECT_UNLOCKED = 0, ASPECT_ORIGINAL = 1 };
-enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12 };
+enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12,
+       RES_THERMAL_DYNAMIC = 13 };
 // (11 was 67% of the display: larecomp.ini "67%" now loads as RES_Q75)
 enum { OUT_AUTO = -1 };  // (Settings.out_lines)
 enum { UPSCALE_BILINEAR = 0, UPSCALE_METALFX = 1 /* macOS */, UPSCALE_FSR1 = 2 /* AMD FSR 1 */,
@@ -65,6 +66,11 @@ typedef struct {
     int vibration;        // a controller's rumble from the game's vibration (hle/input.c), % (0: off; 100 by default)
     bool vibration_phone; // the phone's own motor where no controller has one (hle/input.c; off by default)
     bool prewarm;         // Shader pipeline warm-up at start (Video > Warm up shaders at start); on by default
+    // Thermal dynamic resolution (Video > Auto thermique): reduces the render scale when the phone overheats.
+    // Reads PowerManager.getThermalHeadroom() and GPU frame time. If headroom > 0.85 or GPU time exceeds target
+    // for 3 consecutive frames, lowers scale by 5% steps (min 70%). Slowly raises back when stable.
+    // Auto/Off in the menu; does nothing when off.
+    bool thermal_dyn_res;
     int mali_host_import;  // Mali: allow guest heap import via VK_EXT_external_memory_host; -1 auto (on for Mali gen>=710, driver<r54, RAM>=11GB), 0 off, 1 on
     bool vrs_mali;       // Mali-G720 / Immortalis Gen4: VK_KHR_fragment_shading_rate reduced fragment shading rate (2x2) on the post
                          // passes (Video > VRS Mali-G720; vulkan/exec.c post_pass) - off: the full-rate passes. On with the driver.
