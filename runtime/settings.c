@@ -79,6 +79,7 @@ Settings g_settings = {
     .adpf_mode = -1,      // (Android Dynamic Performance Framework: -1 auto = on for API 33+, off below)
     .sustained_perf = false,  // (Sustained Performance Mode: off by default)
     .shader_cache = true,  // (Vulkan pipeline cache: on by default, speeds up subsequent runs)
+    .mali_preset = 0,  // (Mali GPU preset: 0 = Custom, 1 = Performance, 2 = Balanced, 3 = Quality)
 #else
     .show_fps = false,
 #endif
@@ -268,6 +269,7 @@ void settings_reset_defaults(void) {
     g_settings.sustained_perf = d->sustained_perf;
     g_settings.shader_cache = d->shader_cache;
     g_settings.thermal_dyn_res = d->thermal_dyn_res;
+    g_settings.mali_preset = d->mali_preset;
 #endif
 }
 
@@ -343,6 +345,7 @@ void settings_load(void) {
         else if (!strcmp(key, "sustained_perf")) g_settings.sustained_perf = atoi(val) != 0;
         else if (!strcmp(key, "shader_cache")) g_settings.shader_cache = atoi(val) != 0;
         else if (!strcmp(key, "thermal_dyn_res")) g_settings.thermal_dyn_res = atoi(val) != 0;
+        else if (!strcmp(key, "mali_preset")) g_settings.mali_preset = atoi(val);
         else if (!strcmp(key, "overlay_scale")) g_settings.overlay_scale = atoi(val);
         else if (!strcmp(key, "overlay_opacity")) g_settings.overlay_opacity = atoi(val);
         else if (!strcmp(key, "overlay_items")) g_settings.overlay_items = atoi(val);
@@ -519,6 +522,7 @@ void settings_save(void) {
     fprintf(f, "sustained_perf = %d\n", g_settings.sustained_perf);
     fprintf(f, "shader_cache = %d\n", g_settings.shader_cache);
     fprintf(f, "thermal_dyn_res = %d\n", g_settings.thermal_dyn_res);
+    fprintf(f, "mali_preset = %d\n", g_settings.mali_preset);
     fprintf(f, "overlay_scale = %d\n", g_settings.overlay_scale);
     fprintf(f, "overlay_opacity = %d\n", g_settings.overlay_opacity);
     fprintf(f, "overlay_items = %d\n", g_settings.overlay_items);

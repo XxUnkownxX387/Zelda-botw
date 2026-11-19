@@ -694,6 +694,49 @@ static void tab_display(void) {
                "on your GPU. Applies to shaders translated from now on: restart the app for all of them.");
     if (vk_mali_detected()) {  // (the Mali GPUs: ARM Immortalis Mali, vendorID 0x13B5 - their own options, the others aren't Mali)
         opt_section(tr("GPU Mali"));
+        // Mali GPU preset: applies a group of settings at once (user can still tweak individual settings afterward)
+        static const char *mali_preset_names[] = {tr("Custom (user settings)"), tr("Performance (max fps)"),
+                                                 tr("Balanced"), tr("Quality (best visuals)")};
+        auto apply_mali_preset = [&](int preset) {
+            switch (preset) {
+                case 1: {  // Performance
+                    g_settings.vrs_mali = true;
+                    g_settings.max_gpu_mem_mb = -1;  // Auto (full budget)
+                    g_settings.shader_parallel = true;
+                    g_settings.res_mode = 1;  // 1x
+                    g_settings.fps_mode = 2;  // 60 fps
+                    break;
+                }
+                case 2: {  // Balanced
+                    g_settings.vrs_mali = true;
+                    g_settings.max_gpu_mem_mb = -1;  // Auto
+                    g_settings.shader_parallel = true;
+                    g_settings.res_mode = RES_DYNAMIC;  // Dynamic resolution
+                    g_settings.fps_mode = 2;  // 60 fps
+                    break;
+                }
+                case 3: {  // Quality
+                    g_settings.vrs_mali = false;  // Full rate for best quality
+                    g_settings.max_gpu_mem_mb = -1;  // Auto
+                    g_settings.shader_parallel = true;
+                    g_settings.res_mode = 2;  // 2x
+                    g_settings.fps_mode = 1;  // 30 fps
+                    break;
+                }
+                default: break;  // Custom: keep current settings
+            }
+            g_settings.mali_preset = preset;
+            settings_save();
+        };
+        if (opt_choice(tr("Mali GPU Preset"), &g_settings.mali_preset, mali_preset_names, 4, 0,
+                       tr("Quick configuration for Mali-G720 / Immortalis Gen4. "
+                          "Performance: VRS on, 1x resolution, 60 fps. "
+                          "Balanced: VRS on, Dynamic resolution, 60 fps. "
+                          "Quality: VRS off, 2x resolution, 30 fps. "
+                          "Custom: keep your current individual settings. "
+                          "Each setting can still be changed below after selecting a preset."))) {
+            apply_mali_preset(g_settings.mali_preset);
+        }
         opt_toggle(tr("Variable Rate Shading"), &g_settings.vrs_mali, true,
                    tr("Mali-G720 / Immortalis Gen4: applies a reduced fragment shading rate (2x2) "
                       "on the post-processing passes (SMAA, FXAA, upscalers). Requires VK_KHR_fragment_shading_rate "

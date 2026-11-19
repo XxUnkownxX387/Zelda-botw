@@ -86,6 +86,10 @@ typedef struct {
                                 // reduces stutter on first use. On by default on Mali-G720.
     bool astc_hw_accel;  // ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback.
                          // On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths.
+    // Mali GPU preset (Video > GPU Mali > Preset): 0 = Custom (user-modified), 1 = Performance, 2 = Balanced, 3 = Quality.
+    // Each preset sets vrs_mali, max_gpu_mem_mb, shader_parallel, res_mode, fps_mode.
+    // Selecting a preset applies those values; the user can still tweak individual settings afterward.
+    int mali_preset;
     // Android Dynamic Performance Framework (ADPF, API 33+): hint the OS about frame workload for thermal / power management.
     // -1 = Auto (on for API 33+, off below), 0 = off, 1 = on. Requires a frame-time JNI callback each frame.
     int adpf_mode;
