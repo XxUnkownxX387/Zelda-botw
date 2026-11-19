@@ -275,7 +275,7 @@ void settings_load(void) {
 #else
     char line[256];
 #endif
-    bool tip_key = false, aspect_key = false, output_key = false;
+    bool tip_key = false, aspect_key = false, output_key = false, shader_parallel_in_ini = false;
     while (fgets(line, sizeof line, f)) {
         char key[64];
 #ifdef __ANDROID__
@@ -306,7 +306,10 @@ void settings_load(void) {
         else if (!strcmp(key, "thermal_cap")) g_settings.thermal_cap = atoi(val) != 0;
         else if (!strcmp(key, "thermal_perf")) g_settings.thermal_perf = atoi(val) >= 0 && atoi(val) <= 2 ? atoi(val) : 0;
         else if (!strcmp(key, "shader_int32")) g_settings.shader_int32 = atoi(val) != 0;
-        else if (!strcmp(key, "shader_parallel")) g_settings.shader_parallel = atoi(val) != 0;
+        else if (!strcmp(key, "shader_parallel")) {
+            g_settings.shader_parallel = atoi(val) != 0;
+            shader_parallel_in_ini = true;
+        }
         else if (!strcmp(key, "shader_threads")) g_settings.shader_threads = atoi(val);
         else if (!strcmp(key, "sync_lag")) g_settings.sync_lag = atoi(val) != 0;
         else if (!strcmp(key, "native_code")) g_settings.native_code = atoi(val) != 0;
@@ -405,7 +408,7 @@ void settings_load(void) {
     if (!tip_key) g_settings.menu_tip_seen = true;  // (a settings file from before the note: not a first launch)
     if (!aspect_key) g_settings.aspect_asked = true;  // (likewise: the aspect ratio was chosen already)
     // Auto-enable shader_parallel for Mali/Immortalis if not explicitly set in ini
-    if (!tip_key) {  // tip_key reused as "shader_parallel was in ini"
+    if (!shader_parallel_in_ini) {
         if (strstr(g_settings.gpu_model, "Mali") || strstr(g_settings.gpu_model, "Immortalis")) {
             g_settings.shader_parallel = true;
         }
