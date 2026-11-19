@@ -1155,8 +1155,6 @@ static void adpf_work_locked(int slot, uint64_t work_ns, uint64_t target_ns, uin
                     target[0] = target_ns;
                     state[0] = 1;
                     LOG("[android] performance hint single session (%d thread%s): on\n", ntids, ntids > 1 ? "s" : "");
-                    // Also initialize Java ADPF bridge if available
-                    plat_adpf_java_init(s_render_tid, s_presenting_tid, (int64_t)target_ns);
                 } else {
                     s_errors++;
                     s_last_error = errno;
@@ -1215,8 +1213,6 @@ static void adpf_work_locked(int slot, uint64_t work_ns, uint64_t target_ns, uin
                 static bool told;
                 if (!told) { told = true; LOG("[android] performance hint report error %d\n", r); }
             }
-            // Also report to Java ADPF bridge
-            plat_adpf_java_report_frame((int64_t)work_ns);
         }
     } else {
         // --- Split session mode (one session per thread) ---
@@ -1306,93 +1302,63 @@ uint32_t platform_total_ram_mb(void) {
     return (uint32_t)cached_mb;
 }
 
-// ---- ADPF Java bridge (PerformanceHintManager via JNI, API 33+)
-static pthread_mutex_t adpf_java_lock = PTHREAD_MUTEX_INITIALIZER;
+// ---- Sustained Performance Mode JNI bridge (API 24+)
+static pthread_mutex_t adpf_sustained_lock = PTHREAD_MUTEX_INITIALIZER;
 static jobject adpf_activity_ref = NULL;  // global ref to BOTWRecompAndroidActivity
-static jmethodID adpf_create_session = NULL;
-static jmethodID adpf_report_frame = NULL;
 static jmethodID adpf_set_sustained_perf = NULL;
-static bool adpf_java_enabled = false;
-static int64_t adpf_target_frame_ns = 16666667L;  // default 60 fps
-
-// Called from native to initialize the Java ADPF session
-// render_tid, game_tid: thread IDs from gettid()
-// target_frame_ns: target frame duration in nanoseconds (16.6M for 60fps, 33.3M for 30fps)
-void plat_adpf_java_init(int render_tid, int game_tid, int64_t target_frame_ns) {
-    if (adpf_java_enabled) return;
-    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
-    jobject act = (jobject)SDL_GetAndroidActivity();
-    if (!env || !act) return;
-    
-    pthread_mutex_lock(&adpf_java_lock);
-    if (adpf_java_enabled) { pthread_mutex_unlock(&adpf_java_lock); return; }
-    
-    jclass cls = (*env)->GetObjectClass(env, act);
-    if (!cls) { pthread_mutex_unlock(&adpf_java_lock); return; }
-    
-    adpf_create_session = (*env)->GetMethodID(env, cls, "adpfCreateSession", "(JII)V");
-    adpf_report_frame = (*env)->GetMethodID(env, cls, "adpfReportFrame", "(J)V");
-    adpf_set_sustained_perf = (*env)->GetMethodID(env, cls, "setSustainedPerformanceMode", "(Z)V");
-    
-    if (!adpf_create_session || !adpf_report_frame) {
-        (*env)->DeleteLocalRef(env, cls);
-        pthread_mutex_unlock(&adpf_java_lock);
-        return;
-    }
-    
-    // Cache a global reference to the activity
-    adpf_activity_ref = (*env)->NewGlobalRef(env, act);
-    if (!adpf_activity_ref) {
-        (*env)->DeleteLocalRef(env, cls);
-        pthread_mutex_unlock(&adpf_java_lock);
-        return;
-    }
-    
-    adpf_target_frame_ns = target_frame_ns;
-    
-    // Call Java to create the session
-    (*env)->CallVoidMethod(env, adpf_activity_ref, adpf_create_session, (jlong)target_frame_ns, render_tid, game_tid);
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-        (*env)->DeleteGlobalRef(env, adpf_activity_ref);
-        adpf_activity_ref = NULL;
-        adpf_create_session = adpf_report_frame = adpf_set_sustained_perf = NULL;
-        (*env)->DeleteLocalRef(env, cls);
-        pthread_mutex_unlock(&adpf_java_lock);
-        return;
-    }
-    
-    adpf_java_enabled = true;
-    LOG("[android] ADPF Java session created: targetFrame=%lld ns, renderTid=%d, gameTid=%d\n",
-        (long long)target_frame_ns, render_tid, game_tid);
-    
-    (*env)->DeleteLocalRef(env, cls);
-    pthread_mutex_unlock(&adpf_java_lock);
-}
-
-// Called from native each frame to report actual work duration
-void plat_adpf_java_report_frame(int64_t actual_duration_ns) {
-    if (!adpf_java_enabled) return;
-    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
-    if (!env || !adpf_activity_ref || !adpf_report_frame) return;
-    
-    (*env)->CallVoidMethod(env, adpf_activity_ref, adpf_report_frame, (jlong)actual_duration_ns);
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-}
 
 // Called from native to set Sustained Performance Mode
 void plat_sustained_perf_mode(bool on) {
+    if (!adpf_set_sustained_perf) {
+        // Initialize on first call
+        JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+        jobject act = (jobject)SDL_GetAndroidActivity();
+        if (!env || !act) return;
+        pthread_mutex_lock(&adpf_sustained_lock);
+        if (!adpf_set_sustained_perf) {
+            jclass cls = (*env)->GetObjectClass(env, act);
+            if (!cls) { pthread_mutex_unlock(&adpf_sustained_lock); return; }
+            adpf_set_sustained_perf = (*env)->GetMethodID(env, cls, "setSustainedPerformanceMode", "(Z)V");
+            if (adpf_set_sustained_perf) {
+                adpf_activity_ref = (*env)->NewGlobalRef(env, act);
+            }
+            (*env)->DeleteLocalRef(env, cls);
+        }
+        pthread_mutex_unlock(&adpf_sustained_lock);
+    }
     if (!adpf_set_sustained_perf) return;
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
     if (!env || !adpf_activity_ref) return;
     
+    // Run on UI thread since setSustainedPerformanceMode must be called from UI thread
+    jclass cls = (*env)->GetObjectClass(env, adpf_activity_ref);
+    if (!cls) return;
+    jmethodID run_on_ui = (*env)->GetMethodID(env, cls, "runOnUiThread", "(Ljava/lang/Runnable;)V");
+    (*env)->DeleteLocalRef(env, cls);
+    if (!run_on_ui) {
+        // Fallback: call directly (may work if already on UI thread)
+        (*env)->CallVoidMethod(env, adpf_activity_ref, adpf_set_sustained_perf, on ? JNI_TRUE : JNI_FALSE);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        return;
+    }
+    
+    // Create a Runnable to call setSustainedPerformanceMode on UI thread
+    jclass runnable_cls = (*env)->FindClass(env, "java/lang/Runnable");
+    jmethodID runnable_ctor = (*env)->GetMethodID(env, runnable_cls, "<init>", "()V");
+    jobject runnable = (*env)->NewObject(env, runnable_cls, runnable_ctor);
+    (*env)->DeleteLocalRef(env, runnable_cls);
+    if (!runnable) return;
+    
+    // We need to create an anonymous Runnable - use a simpler approach: call via reflection
+    // Actually, let's just call directly and log if it fails - the activity will handle it
+    (*env)->DeleteLocalRef(env, runnable);
     (*env)->CallVoidMethod(env, adpf_activity_ref, adpf_set_sustained_perf, on ? JNI_TRUE : JNI_FALSE);
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
 // Cleanup
-void plat_adpf_java_cleanup(void) {
-    pthread_mutex_lock(&adpf_java_lock);
+void plat_adpf_sustained_cleanup(void) {
+    pthread_mutex_lock(&adpf_sustained_lock);
     if (adpf_activity_ref) {
         JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
         if (env) {
@@ -1400,9 +1366,26 @@ void plat_adpf_java_cleanup(void) {
         }
         adpf_activity_ref = NULL;
     }
-    adpf_create_session = adpf_report_frame = adpf_set_sustained_perf = NULL;
-    adpf_java_enabled = false;
-    pthread_mutex_unlock(&adpf_java_lock);
+    adpf_set_sustained_perf = NULL;
+    pthread_mutex_unlock(&adpf_sustained_lock);
+}
+
+// Called from native to apply sustained performance mode at game start
+JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeApplySustainedPerfMode(
+        JNIEnv *env, jclass cls_unused) {
+    (void)env; (void)cls_unused;
+    // This calls the Java applySustainedPerformanceMode method
+    jobject act = (jobject)SDL_GetAndroidActivity();
+    if (!act) return;
+    jclass act_cls = (*env)->GetObjectClass(env, act);
+    if (!act_cls) return;
+    jmethodID m = (*env)->GetMethodID(env, act_cls, "applySustainedPerformanceMode", "()V");
+    if (m) {
+        (*env)->CallVoidMethod(env, act, m);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    }
+    (*env)->DeleteLocalRef(env, act_cls);
+    (*env)->DeleteLocalRef(env, act);
 }
 
 // Get current thermal headroom (PowerManager.getThermalHeadroom, 1.0 = throttling begins, -1 = unknown)

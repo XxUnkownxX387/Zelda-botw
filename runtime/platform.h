@@ -115,15 +115,8 @@ void plat_adpf_stats(PlatAdpfStats *out);
 void plat_thread_unpin(void);
 // Total system RAM in MB (reads /proc/meminfo once, caches result)
 uint32_t platform_total_ram_mb(void);
-// ADPF Java bridge (PerformanceHintManager via JNI, API 33+)
-// Initialize the Java ADPF session with render/game thread IDs and target frame duration
-void plat_adpf_java_init(int render_tid, int game_tid, int64_t target_frame_ns);
-// Report actual frame work duration to the Java ADPF session
-void plat_adpf_java_report_frame(int64_t actual_duration_ns);
 // Set Sustained Performance Mode (Window.setSustainedPerformanceMode, API 24+)
 void plat_sustained_perf_mode(bool on);
-// Cleanup the Java ADPF session
-void plat_adpf_java_cleanup(void);
 // Get current thermal headroom (PowerManager.getThermalHeadroom, 1.0 = throttling begins, -1 = unknown)
 float plat_thermal_headroom(void);
 #endif

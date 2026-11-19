@@ -508,14 +508,21 @@ static void create_device(void) {
                 ext[n_ext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME;
                 // (VK_KHR_fragment_shading_rate r2: ask which fragment sizes the device supports - the post passes
                 // use a 2x2 reduced shading rate when it's there, exec.c post_pass)
-                VkPhysicalDeviceFragmentShadingRatePropertiesKHR q_fsr_props = {
-                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
-                VkPhysicalDeviceFragmentShadingRateKHR rates[8];
+                VkPhysicalDeviceFragmentShadingRateKHR rates[32];
                 uint32_t n_rates = 0;
+                // First call: get the count
+                vkGetPhysicalDeviceFragmentShadingRatesKHR(g_vk.phys, &n_rates, NULL);
+                if (n_rates > 32) n_rates = 32;
+                // Initialize sType for each element
+                for (uint32_t i = 0; i < n_rates; i++) {
+                    rates[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_KHR;
+                    rates[i].pNext = NULL;
+                }
+                // Second call: get the data
                 vkGetPhysicalDeviceFragmentShadingRatesKHR(g_vk.phys, &n_rates, rates);
                 g_vk.fsr_2x2 = false;
                 for (uint32_t i = 0; i < n_rates; i++)
-                    if (rates[i].fragmentSize.width <= 2 && rates[i].fragmentSize.height <= 2) { g_vk.fsr_2x2 = true; break; }
+                    if (rates[i].fragmentSize.width == 2 && rates[i].fragmentSize.height == 2) { g_vk.fsr_2x2 = true; break; }
                 if (g_vk.fsr_2x2) LOG("[vk-cap] fragment shading rate: 2x2 supported\n");
                 else g_vk.fragment_shading_rate = false;  // (no reduced rate: the post passes keep shading at 1x1)
             }
@@ -576,6 +583,30 @@ static void create_device(void) {
     // but the host import (VK_EXT_external_memory_host) works and avoids CPU copies of ~850 MB/frame.
     // Auto gating: on for Mali GPU generation >= 710, driver version < r54, RAM >= 11 GB.
     // FOR 12GB+ RAM devices (Xiaomi 15T Mali-G720 MC7): force enable host import and remove conservative limits.
+    // Query driver properties BEFORE host import decision to get Mali driver version
+    VkPhysicalDeviceDriverProperties driver = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 properties = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                                              .pNext = driver_props ? &driver : NULL};
+    vkGetPhysicalDeviceProperties2(g_vk.phys, &properties);
+    if (!driver_props) snprintf(driver.driverName, sizeof driver.driverName, "unknown");
+    LOG("[vk-cap] gpu %s vendor %#x device %#x api %u.%u.%u driver-id %u name %s info %s\n",
+        g_vk.props.deviceName, g_vk.props.vendorID, g_vk.props.deviceID, VK_API_VERSION_MAJOR(g_vk.props.apiVersion),
+        VK_API_VERSION_MINOR(g_vk.props.apiVersion), VK_API_VERSION_PATCH(g_vk.props.apiVersion),
+        (unsigned)driver.driverID, driver.driverName, driver.driverInfo);
+    // Mali driver version from VK_KHR_driver_properties (driverInfo, "rNNpM") - replaces the heuristic decode of
+    // props.driverVersion; g_vk.mali_driver_major / mali_driver_minor hold the parsed rNN / rM parts.
+    if (g_vk.props.vendorID == 0x13B5) {  // Mali
+        int rmaj = 0, rmin = 0;
+        // Parse driverInfo looking for "r<major>p<minor>" pattern (e.g., "v1.r49p1-01eac0...")
+        const char *p = driver.driverInfo;
+        while (*p) {
+            if (*p == 'r' && p[1] >= '0' && p[1] <= '9') {
+                if (sscanf(p, "r%dp%d", &g_vk.mali_driver_major, &g_vk.mali_driver_minor) == 2) break;
+            }
+            p++;
+        }
+        LOG("[vk-cap] Mali driver version string (raw): %s -> r%d.p%d\n", driver.driverInfo, g_vk.mali_driver_major, g_vk.mali_driver_minor);
+    }
     bool mali = g_vk.props.vendorID == 0x13B5;
     bool xclipse = strstr(g_vk.props.deviceName, "Xclipse") || g_vk.props.vendorID == 0x144D;  // (Samsung)
     bool by_setting = g_settings.gpu_heap == 0 && !vk_driver_is_turnip();
@@ -793,25 +824,6 @@ static void create_device(void) {
     g_vk.dyn_render = h13.dynamicRendering && !no_dr;
     if (!g_vk.dyn_render)
         LOG("[vk] no dynamic rendering (%s): classic render passes\n", no_dr ? "switched off" : "the driver lacks it");
-    VkPhysicalDeviceDriverProperties driver = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-    VkPhysicalDeviceProperties2 properties = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
-                                              .pNext = driver_props ? &driver : NULL};
-    vkGetPhysicalDeviceProperties2(g_vk.phys, &properties);
-    if (!driver_props) snprintf(driver.driverName, sizeof driver.driverName, "unknown");
-    LOG("[vk-cap] gpu %s vendor %#x device %#x api %u.%u.%u driver-id %u name %s info %s\n",
-        g_vk.props.deviceName, g_vk.props.vendorID, g_vk.props.deviceID, VK_API_VERSION_MAJOR(g_vk.props.apiVersion),
-        VK_API_VERSION_MINOR(g_vk.props.apiVersion), VK_API_VERSION_PATCH(g_vk.props.apiVersion),
-        (unsigned)driver.driverID, driver.driverName, driver.driverInfo);
-    // Mali driver version from VK_KHR_driver_properties (driverInfo, "rNNpM") - replaces the heuristic decode of
-    // props.driverVersion; g_vk.mali_driver_major / mali_driver_minor hold the parsed rNN / rM parts.
-    if (g_vk.props.vendorID == 0x13B5) {  // Mali
-        int rmaj = 0, rmin = 0;
-        if (sscanf(driver.driverInfo, "r%dp%d", &rmaj, &rmin) == 2) {
-            g_vk.mali_driver_major = rmaj;
-            g_vk.mali_driver_minor = rmin;
-        }
-        LOG("[vk-cap] Mali driver version string (raw): %s -> r%d.p%d\n", driver.driverInfo, g_vk.mali_driver_major, g_vk.mali_driver_minor);
-    }
     LOG("[vk-cap] storage16 %u timeline %u mirror-clamp %u scalar %u dynamic-rendering %u sync2 %u demote %u terminate %u maintenance4 %u int64 %u int8 %u storage8 %u uniform-storage8 %u BC %u ASTC %u timestamps %u\n",
         h11.storageBuffer16BitAccess, h12.timelineSemaphore, h12.samplerMirrorClampToEdge, h12.scalarBlockLayout,
         h13.dynamicRendering, h13.synchronization2, h13.shaderDemoteToHelperInvocation, h13.shaderTerminateInvocation,
@@ -2317,6 +2329,10 @@ void backend_init(void) {
     LOG("[vk] %s, swapchain %ux%u, %u images\n", g_vk.props.deviceName, g_vk.sc_extent.width, g_vk.sc_extent.height,
         g_vk.sc_count);
     vk_pipeline_cache_start_periodic_save();
+#ifdef __ANDROID__
+    extern void nativeApplySustainedPerfMode(void);
+    nativeApplySustainedPerfMode();
+#endif
 }
 
 // ---- in-place reboot (runtime/main.c teardown; main thread, guest threads stopped)

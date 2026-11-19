@@ -8421,18 +8421,16 @@ static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *src
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
-    if (vrs && g_settings.vrs_mali && g_vk.fragment_shading_rate) {  // (VK_KHR_fragment_shading_rate: 2x2 reduced shading rate on the intermediate post pass - the
-        // Mali-G720 has the extension and its driver supports it, exec.c post_pass; the final passes of the chain - present /
-        // upscale / SMAA - keep shading at the full rate)
-        VkExtent2D fsr = {.width = 2, .height = 2};
+    if (g_vk.fragment_shading_rate) {  // Always set fragment shading rate when the feature is enabled
+        VkExtent2D fsr = vrs && g_settings.vrs_mali ? (VkExtent2D){2, 2} : (VkExtent2D){1, 1};
         VkFragmentShadingRateCombinerOpKHR fc[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
                                                   VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR};
         vkCmdSetFragmentShadingRateKHR(cb, &fsr, fc);
     }
     ss.known &= ~SS_SETS;  // (another layout: the draws' sets are bound again)
     vkCmdDraw(cb, 3, 1, 0, 0);
-    if (vrs && g_settings.vrs_mali && g_vk.fragment_shading_rate) {  // (reset to the full rate once the pass is done - only the intermediates shade less)
-        VkExtent2D fsr = {.width = 1, .height = 1};
+    if (g_vk.fragment_shading_rate) {  // Reset to full rate after draw if we used reduced rate
+        VkExtent2D fsr = {1, 1};
         VkFragmentShadingRateCombinerOpKHR fc[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
                                                   VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR};
         vkCmdSetFragmentShadingRateKHR(cb, &fsr, fc);
