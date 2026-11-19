@@ -85,7 +85,8 @@ Settings g_settings = {
     .sync_lag = true,           // (a few more fps; the CPU's reads of GPU results a frame old: nvn/objects.c nvnSyncWait)
     .out_lines = OUT_AUTO,      // (POCO F7 Ultra, 3200x1440, 1.8.2's Great Plateau: GPU 22.8 ms a frame at the screen's,
                                 // 18.6 at 1080 lines with a larger scene - the final image's passes over 2.2x the pixels)
-    .max_gpu_mem_mb = 0,        // (0 = no VRAM limit; Mali with low RAM: auto-calculated as ~35% of total RAM)
+    .max_gpu_mem_mb = -1,       // (-1 = Auto: Mali with low RAM auto-calculates ~35% of total RAM; 0 = no VRAM limit;
+                               // >0 = a fixed VRAM budget in MB)
 #else
     .upscaler = UPSCALE_SHARP,  // (MetalFX on macOS, AMD FSR 1 on Windows)
 #endif
@@ -409,8 +410,8 @@ void settings_load(void) {
             g_settings.shader_parallel = true;
         }
     }
-    // Auto-calculate max_gpu_mem_mb for Mali with low RAM (0 = unlimited, >0 = budget)
-    if (g_settings.max_gpu_mem_mb == 0) {
+    // Auto-calculate max_gpu_mem_mb for Mali with low RAM (-1 = Auto, 0 = unlimited, >0 = budget)
+    if (g_settings.max_gpu_mem_mb == -1) {
         bool is_mali = strstr(g_settings.gpu_model, "Mali") || strstr(g_settings.gpu_model, "Immortalis");
         bool is_mali_g720 = strstr(g_settings.gpu_model, "Mali-G720");
         if (is_mali) {
