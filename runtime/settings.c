@@ -69,7 +69,8 @@ Settings g_settings = {
     .vibration_phone = false,  // (phone motor fallback off by default)
     .prewarm = true,  // (Warm up shaders at start: on by default)
     .mali_host_import = -1,  // (Mali host import: -1 auto, 0 off, 1 on)
-    .vrs_mali = true,       // (Mali-G720 / Immortalis Gen4: the VK_KHR_fragment_shading_rate 2x2 on the post passes)
+    .vrs_mali = false,      // (Mali-G720 / Immortalis Gen4: the VK_KHR_fragment_shading_rate 2x2 on the intermediate post passes;
+                            // off by default - the final pass of the chain (present / upscale / SMAA) keeps the full rate)
     .afbc_advanced = true,  // (the Mali's advanced AFBC compression)
     .thermal_perf = 0,      // (0: Auto - the thermal cap; 1: Performance - no app-level drop; 2: Balanced - status only)
     .turbo_mali = false,    // (Mali-G720 Turbo mode: off by default, user must enable explicitly)

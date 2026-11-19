@@ -8307,8 +8307,10 @@ static VkPipeline post_pipeline(const char *fs, VkFormat fmt) {
     VkPipelineColorBlendAttachmentState cba = {.colorWriteMask = 0xF};
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1,
                                               .pAttachments = &cba};
-    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR};
+    VkPipelineDynamicStateCreateInfo dy = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = g_vk.fragment_shading_rate ? 3u : 2u,
+        .pDynamicStates = dyn};
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .colorAttachmentCount = 1,
                                         .pColorAttachmentFormats = &fmt};
     VkPipelineDepthStencilStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
@@ -8392,7 +8394,7 @@ static VkImageView smaa_lut(int i) {
 // One post pass (outside the window image's rendering): srcs (bindings 0..n-1) -> dst, fragment shader `fs`.
 // clear: start from zero (SMAA's edge pass only writes edge pixels; its weights / output read them).
 static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *srcs, int n, TexBackend *dst, const float pc[8],
-                      bool clear) {
+                      bool clear, bool vrs) {
     VkPipeline pipe = post_pipeline(fs, dst->format);  // (before the rendering begins: created inside it, the NVIDIA driver crashed)
     vk_full_barrier(cb);
     VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = post_view(dst),
@@ -8418,16 +8420,23 @@ static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *src
     VkRect2D sc = {{0, 0}, {dst->width, dst->height}};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
-    if (g_vk.fragment_shading_rate) {  // (VK_KHR_fragment_shading_rate: 2x2 reduced shading rate on the post pass - the Mali-G720
-        // has the extension and its driver supports it; the secondary post-processing passes are the shadered ones)
+    vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
+    if (vrs && g_settings.vrs_mali && g_vk.fragment_shading_rate) {  // (VK_KHR_fragment_shading_rate: 2x2 reduced shading rate on the intermediate post pass - the
+        // Mali-G720 has the extension and its driver supports it, exec.c post_pass; the final passes of the chain - present /
+        // upscale / SMAA - keep shading at the full rate)
         VkExtent2D fsr = {.width = 2, .height = 2};
         VkFragmentShadingRateCombinerOpKHR fc[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
                                                   VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR};
         vkCmdSetFragmentShadingRateKHR(cb, &fsr, fc);
     }
-    vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
     ss.known &= ~SS_SETS;  // (another layout: the draws' sets are bound again)
     vkCmdDraw(cb, 3, 1, 0, 0);
+    if (vrs && g_settings.vrs_mali && g_vk.fragment_shading_rate) {  // (reset to the full rate once the pass is done - only the intermediates shade less)
+        VkExtent2D fsr = {.width = 1, .height = 1};
+        VkFragmentShadingRateCombinerOpKHR fc[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
+                                                  VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR};
+        vkCmdSetFragmentShadingRateKHR(cb, &fsr, fc);
+    }
     vk_end_rendering(cb);
 }
 
@@ -8465,18 +8474,18 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         TexBackend *edges = post_image(0, b->width, b->height, VK_FORMAT_R8G8B8A8_UNORM), *weights = post_image(1, b->width, b->height, VK_FORMAT_R8G8B8A8_UNORM);
         TexBackend *out = post_image(2, b->width, b->height, VK_FORMAT_R8G8B8A8_UNORM);
         VkImageView in[3] = {v};
-        post_pass(cb, "smaa_edge.frag", in, 1, edges, m, true);
+        post_pass(cb, "smaa_edge.frag", in, 1, edges, m, true, true);
         VkImageView wi[3] = {post_view(edges), smaa_lut(0), smaa_lut(1)};
-        post_pass(cb, "smaa_weight.frag", wi, 3, weights, m, true);
+        post_pass(cb, "smaa_weight.frag", wi, 3, weights, m, true, true);
         VkImageView bi[3] = {v, post_view(weights)};
-        post_pass(cb, "smaa_blend.frag", bi, 2, out, m, false);
+        post_pass(cb, "smaa_blend.frag", bi, 2, out, m, false, false);
         v = post_view(out);
     } else if (fxaa) {  // FXAA (shaders.c fxaa.frag): one pass
         float w = (float)b->width, h = (float)b->height;
         float m[8] = {1.0f / w, 1.0f / h, w, h};
         TexBackend *out = post_image(2, b->width, b->height, VK_FORMAT_R8G8B8A8_UNORM);
         VkImageView in[3] = {v};
-        post_pass(cb, "fxaa.frag", in, 1, out, m, false);
+        post_pass(cb, "fxaa.frag", in, 1, out, m, false, false);
         v = post_view(out);
     }
     if (fsr && up == UPSCALE_SGSR1) {
@@ -8484,17 +8493,17 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         TexBackend *o = post_image(3, ow, oh, VK_FORMAT_R8G8B8A8_UNORM);
         float ps[8] = {1.0f / iw, 1.0f / ih, iw, ih, (float)ow, (float)oh};
         VkImageView si[3] = {v};
-        post_pass(cb, "sgsr1.frag", si, 1, o, ps, false);
+        post_pass(cb, "sgsr1.frag", si, 1, o, ps, false, false);
         v = post_view(o);
     } else if (fsr) {
         float iw = (float)b->width, ih = (float)b->height;
         TexBackend *e = post_image(3, ow, oh, VK_FORMAT_R8G8B8A8_UNORM), *r = post_image(4, ow, oh, VK_FORMAT_R8G8B8A8_UNORM);
         float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
         VkImageView ei[3] = {v};
-        post_pass(cb, "easu.frag", ei, 1, e, pe, false);
+        post_pass(cb, "easu.frag", ei, 1, e, pe, false, true);
         float pr[8] = {exp2f(-0.2f), 0, 0, 0, (float)ow, (float)oh};  // (sharpness 0.2 stops: AMD's default)
         VkImageView ri_[3] = {post_view(e)};
-        post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
+        post_pass(cb, "rcas.frag", ri_, 1, r, pr, false, false);
         v = post_view(r);
     }
     vk_full_barrier(cb);
@@ -8551,15 +8560,15 @@ static void scene_upscale(Prog *pr, CmdRec *r) {
         gp_mark(cb, "scene upscale %ux%u -> %ux%u: %s", b->width, b->height, ow, oh, mode == UPSCALE_SGSR1 ? "sgsr1" : "easu");
         if (mode == UPSCALE_SGSR1) {
             float ps[8] = {1.0f / iw, 1.0f / ih, iw, ih, (float)ow, (float)oh};
-            post_pass(cb, "sgsr1.frag", in, 1, o, ps, false);
+            post_pass(cb, "sgsr1.frag", in, 1, o, ps, false, false);
         } else {
             TexBackend *e = post_image(5, ow, oh, b->format);
             float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
-            post_pass(cb, "easu.frag", in, 1, e, pe, false);
+            post_pass(cb, "easu.frag", in, 1, e, pe, false, true);
             gp_mark(cb, "scene upscale: rcas");
             float pr_[8] = {exp2f(-0.2f), 0, 0, 0, (float)ow, (float)oh};  // (sharpness 0.2 stops: AMD's default)
             VkImageView ri[3] = {post_view(e)};
-            post_pass(cb, "rcas.frag", ri, 1, o, pr_, false);
+            post_pass(cb, "rcas.frag", ri, 1, o, pr_, false, false);
         }
         vk_full_barrier(cb);
         scene_up.t = t;

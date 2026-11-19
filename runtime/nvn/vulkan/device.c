@@ -504,7 +504,21 @@ static void create_device(void) {
             VkPhysicalDeviceFeatures2 f_fsr = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &q_fsr};
             vkGetPhysicalDeviceFeatures2(g_vk.phys, &f_fsr);
             g_vk.fragment_shading_rate = q_fsr.pipelineFragmentShadingRate;
-            if (g_vk.fragment_shading_rate) ext[n_ext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME;
+            if (g_vk.fragment_shading_rate) {
+                ext[n_ext++] = VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME;
+                // (VK_KHR_fragment_shading_rate r2: ask which fragment sizes the device supports - the post passes
+                // use a 2x2 reduced shading rate when it's there, exec.c post_pass)
+                VkPhysicalDeviceFragmentShadingRatePropertiesKHR q_fsr_props = {
+                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
+                VkPhysicalDeviceFragmentShadingRateKHR rates[8];
+                uint32_t n_rates = 0;
+                vkGetPhysicalDeviceFragmentShadingRatesKHR(g_vk.phys, &n_rates, rates);
+                g_vk.fsr_2x2 = false;
+                for (uint32_t i = 0; i < n_rates; i++)
+                    if (rates[i].fragmentSize.width <= 2 && rates[i].fragmentSize.height <= 2) { g_vk.fsr_2x2 = true; break; }
+                if (g_vk.fsr_2x2) LOG("[vk-cap] fragment shading rate: 2x2 supported\n");
+                else g_vk.fragment_shading_rate = false;  // (no reduced rate: the post passes keep shading at 1x1)
+            }
         }
     }
     // (below 1.3: pick_device checked the required ones are there; an optional group goes in only whole - dynamic
