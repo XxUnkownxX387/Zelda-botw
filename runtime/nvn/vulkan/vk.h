@@ -55,6 +55,8 @@ typedef struct {
                                   // pipeline state (exec.c PipeKey.prim_restart)
     bool fragment_shading_rate; // VK_KHR_fragment_shading_rate in use: a reduced fragment shading rate (exec.c post passes)
     bool fsr_2x2;                // VK_KHR_fragment_shading_rate: the device supports a 2x2 fragment shading rate (exec.c post passes)
+    int mali_driver_major;   // the Mali driver version (VK_KHR_driver_properties driverInfo, "rNNpM") - Mali-G720 / Immortalis Gen4
+    int mali_driver_minor;   // the Mali driver version's minor part (VK_KHR_driver_properties driverInfo, "rNNpM")
     bool texture_compression_astc_hdr; // VK_EXT_texture_compression_astc_hdr: hardware ASTC HDR decoding
 #ifdef __ANDROID__
     bool map_placed;              // VK_EXT_map_memory_placed: the guest heap mapped as GPU memory (exec.c vk_heap_place)

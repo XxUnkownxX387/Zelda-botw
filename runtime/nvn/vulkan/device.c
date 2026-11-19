@@ -603,20 +603,9 @@ static void create_device(void) {
                 gen_str += 6;  // skip "Mali-G"
                 gpu_gen = atoi(gen_str);
             }
-            // Driver version: props.driverVersion (Vulkan driver version, vendor-specific encoding)
-            // For Mali, typically encoded with major version in upper bits. Try to extract rXX major version.
-            uint32_t dv = g_vk.props.driverVersion;
-            int driver_ver = 0;
-            if (dv >= 10000) {
-                // Likely encoded as major*10000 + minor*100 + patch (e.g., 540100 for r54.1.0)
-                driver_ver = dv / 10000;
-            } else if (dv >= 100) {
-                // Likely encoded as major*100 + minor (e.g., 5401 for r54.1)
-                driver_ver = dv / 100;
-            } else {
-                // Small value, use as-is (e.g., 49 for r49)
-                driver_ver = dv;
-            }
+            // Mali driver version from VK_KHR_driver_properties (driverInfo, "rNNpM") - g_vk.mali_driver_major holds
+            // the rNN part (r49p1 -> 49); replaces the heuristic decode of props.driverVersion.
+            int driver_ver = g_vk.mali_driver_major;
             // System RAM in GB
             int total_ram_gb = 0;
             FILE *meminfo = fopen("/proc/meminfo", "r");
@@ -643,8 +632,8 @@ static void create_device(void) {
             } else {
                 auto_on = (gpu_gen >= 710) && (driver_ver < 54) && (total_ram_gb >= 11);
             }
-            LOG("[vk] Mali host import auto: gpu_gen=%d, driver_ver=r%d, ram=%d GB, is_g720=%d, high_ram=%d -> %s\n",
-                gpu_gen, driver_ver, total_ram_gb, is_mali_g720, is_high_ram, auto_on ? "on" : "off");
+            LOG("[vk] Mali host import auto: gpu_gen=%d, driver_ver=r%d.p%d, ram=%d GB, is_g720=%d, high_ram=%d -> %s\n",
+                gpu_gen, driver_ver, g_vk.mali_driver_minor, total_ram_gb, is_mali_g720, is_high_ram, auto_on ? "on" : "off");
             if (setting == 1) {
                 g_vk.host_import = true;
             } else if (setting == 0) {
@@ -655,8 +644,8 @@ static void create_device(void) {
             // VK_ARM_scheduling_controls errata (SDEN-3735689): feature-query bug on drivers r47p0-r49p2
             // (fixed r49p3/r53p0). Mali-G720 on Xiaomi 15T is r49p1 (affected) - explicitly do NOT enable.
             if (has_ext(ep, ne, VK_ARM_SCHEDULING_CONTROLS_EXTENSION_NAME)) {
-                if (driver_ver >= 47 && driver_ver <= 49) {
-                    LOG("[vk-cap] VK_ARM_scheduling_controls present but disabled: Mali r%d (r47-r49 errata)\n", driver_ver);
+                if (g_vk.mali_driver_major >= 47 && g_vk.mali_driver_major <= 49) {
+                    LOG("[vk-cap] VK_ARM_scheduling_controls present but disabled: Mali r%d (r47-r49 errata)\n", g_vk.mali_driver_major);
                 } else {
                     LOG("[vk-cap] VK_ARM_scheduling_controls available (not on affected Mali driver)\n");
                 }
@@ -813,6 +802,16 @@ static void create_device(void) {
         g_vk.props.deviceName, g_vk.props.vendorID, g_vk.props.deviceID, VK_API_VERSION_MAJOR(g_vk.props.apiVersion),
         VK_API_VERSION_MINOR(g_vk.props.apiVersion), VK_API_VERSION_PATCH(g_vk.props.apiVersion),
         (unsigned)driver.driverID, driver.driverName, driver.driverInfo);
+    // Mali driver version from VK_KHR_driver_properties (driverInfo, "rNNpM") - replaces the heuristic decode of
+    // props.driverVersion; g_vk.mali_driver_major / mali_driver_minor hold the parsed rNN / rM parts.
+    if (g_vk.props.vendorID == 0x13B5) {  // Mali
+        int rmaj = 0, rmin = 0;
+        if (sscanf(driver.driverInfo, "r%dp%d", &rmaj, &rmin) == 2) {
+            g_vk.mali_driver_major = rmaj;
+            g_vk.mali_driver_minor = rmin;
+        }
+        LOG("[vk-cap] Mali driver version string (raw): %s -> r%d.p%d\n", driver.driverInfo, g_vk.mali_driver_major, g_vk.mali_driver_minor);
+    }
     LOG("[vk-cap] storage16 %u timeline %u mirror-clamp %u scalar %u dynamic-rendering %u sync2 %u demote %u terminate %u maintenance4 %u int64 %u int8 %u storage8 %u uniform-storage8 %u BC %u ASTC %u timestamps %u\n",
         h11.storageBuffer16BitAccess, h12.timelineSemaphore, h12.samplerMirrorClampToEdge, h12.scalarBlockLayout,
         h13.dynamicRendering, h13.synchronization2, h13.shaderDemoteToHelperInvocation, h13.shaderTerminateInvocation,
