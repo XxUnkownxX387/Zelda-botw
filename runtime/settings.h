@@ -80,6 +80,12 @@ typedef struct {
                                 // reduces stutter on first use. On by default on Mali-G720.
     bool astc_hw_accel;  // ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback.
                          // On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths.
+    // Android Dynamic Performance Framework (ADPF, API 33+): hint the OS about frame workload for thermal / power management.
+    // -1 = Auto (on for API 33+, off below), 0 = off, 1 = on. Requires a frame-time JNI callback each frame.
+    int adpf_mode;
+    // Sustained Performance Mode (API 24+): tells Android the app wants predictable, sustained performance.
+    // Only effective when the window is focused; the OS may grant it (Window.setSustainedPerformanceMode).
+    bool sustained_perf;
     // Driver compatibility (the start screen's Settings > Prelaunch, ui/launcher.mm; from LASRecompAndroid), for GPUs
     // where a Turnip path draws wrong: read when the game starts (gpu_heap, inplace_reads) or when the app starts
     // (turnip_lrz, log_file). -1 Automatic: on for the Adreno 8xx GPUs these paths were made on, off elsewhere

@@ -76,6 +76,8 @@ Settings g_settings = {
     .turbo_mali = false,    // (Mali-G720 Turbo mode: off by default, user must enable explicitly)
     .async_shader_compile = true,  // (Async shader compilation: on by default for Mali-G720)
     .astc_hw_accel = true,  // (ASTC hardware acceleration: on by default for Mali-G720)
+    .adpf_mode = -1,      // (Android Dynamic Performance Framework: -1 auto = on for API 33+, off below)
+    .sustained_perf = false,  // (Sustained Performance Mode: off by default)
 #else
     .show_fps = false,
 #endif
@@ -260,6 +262,8 @@ void settings_reset_defaults(void) {
     g_settings.turbo_mali = d->turbo_mali;
     g_settings.async_shader_compile = d->async_shader_compile;
     g_settings.astc_hw_accel = d->astc_hw_accel;
+    g_settings.adpf_mode = d->adpf_mode;
+    g_settings.sustained_perf = d->sustained_perf;
 #endif
 }
 
@@ -331,6 +335,8 @@ void settings_load(void) {
         else if (!strcmp(key, "turbo_mali")) g_settings.turbo_mali = atoi(val) != 0;
         else if (!strcmp(key, "async_shader_compile")) g_settings.async_shader_compile = atoi(val) != 0;
         else if (!strcmp(key, "astc_hw_accel")) g_settings.astc_hw_accel = atoi(val) != 0;
+        else if (!strcmp(key, "adpf_mode")) g_settings.adpf_mode = !strcmp(val, "auto") ? -1 : atoi(val);
+        else if (!strcmp(key, "sustained_perf")) g_settings.sustained_perf = atoi(val) != 0;
         else if (!strcmp(key, "overlay_scale")) g_settings.overlay_scale = atoi(val);
         else if (!strcmp(key, "overlay_opacity")) g_settings.overlay_opacity = atoi(val);
         else if (!strcmp(key, "overlay_items")) g_settings.overlay_items = atoi(val);
@@ -503,6 +509,8 @@ void settings_save(void) {
     fprintf(f, "turbo_mali = %d\n", g_settings.turbo_mali);
     fprintf(f, "async_shader_compile = %d\n", g_settings.async_shader_compile);
     fprintf(f, "astc_hw_accel = %d\n", g_settings.astc_hw_accel);
+    fprintf(f, "adpf_mode = %s\n", g_settings.adpf_mode == -1 ? "auto" : g_settings.adpf_mode ? "1" : "0");
+    fprintf(f, "sustained_perf = %d\n", g_settings.sustained_perf);
     fprintf(f, "overlay_scale = %d\n", g_settings.overlay_scale);
     fprintf(f, "overlay_opacity = %d\n", g_settings.overlay_opacity);
     fprintf(f, "overlay_items = %d\n", g_settings.overlay_items);

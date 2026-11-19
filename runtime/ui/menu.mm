@@ -716,6 +716,22 @@ static void tab_display(void) {
                       "significantly reducing texture upload times and memory bandwidth. "
                       "On by default for Mali-G720. Applies at next game start; restart the app for all textures."));
     }
+    // Android Dynamic Performance Framework (ADPF) - available on API 33+
+    const char *adpf_modes[] = {tr("Auto (on for API 33+)"), tr("Off"), tr("On")};
+    opt_choice(tr("ADPF"), &g_settings.adpf_mode, adpf_modes, 3, -1,
+               tr("Android Dynamic Performance Framework (API 33+): hints the OS about frame workload for "
+                  "thermal and power management. Auto: enabled on API 33+, off on older versions. Off: disabled. "
+                  "On: always enabled if API 33+. Requires a JNI callback each frame; applies at next game start."));
+    // Sustained Performance Mode (API 24+)
+    if (opt_toggle(tr("Sustained Performance Mode"), &g_settings.sustained_perf, false,
+                   tr("Window.setSustainedPerformanceMode (API 24+): requests predictable sustained performance from "
+                      "the OS while the window is focused. The OS may grant it, lowering max clocks for stability. "
+                      "Off by default. Applies at once when toggled."))) {
+#ifdef __ANDROID__
+            extern "C" void plat_sustained_perf_mode(bool on);
+            plat_sustained_perf_mode(g_settings.sustained_perf);
+#endif
+        }
 #endif
     opt_end();
 }
