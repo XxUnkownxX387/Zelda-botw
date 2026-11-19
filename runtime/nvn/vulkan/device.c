@@ -2265,6 +2265,9 @@ bool vk_driver_is_turnip(void) {
     }
     return t > 0;
 }
+// Mali (ARM Immortalis Mali, the Mali-G720 family): the Mali GPUs (vendorID 0x13B5) - the Mali options are only for
+// them, the menu's "GPU Mali" section and the launcher's Mali rows (device.c / ui/menu.mm, ui/launcher.mm)
+bool vk_mali_detected(void) { return g_vk.props.vendorID == 0x13B5; }
 #endif
 
 void backend_init(void) {

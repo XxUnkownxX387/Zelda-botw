@@ -512,6 +512,7 @@ extern "C" void renderer_get_scene_scale(float *sx, float *sy);  // (vulkan/text
 extern "C" void renderer_get_scale(float *sx, float *sy);        // (the final image's)
 extern "C" int input_pad_family(void);  // runtime/hle/input.c
 extern "C" double output_scale_dynamic_factor(void);
+extern "C" bool vk_mali_detected(void);  // (runtime/nvn/vulkan/device.c: Mali, the ARM Mali GPUs - vendorID 0x13B5)
 
 static void tab_display(void) {
     float scale = ImGui::GetFontSize() / 34;
@@ -683,33 +684,38 @@ static void tab_display(void) {
                "Translates the game's shaders with 32-bit address math, the path used for drivers without 64-bit "
                "integers (Adreno 6xx / 7xx and Mali stock drivers). Try it if lighting, grass or text are missing or wrong "
                "on your GPU. Applies to shaders translated from now on: restart the app for all of them.");
-    opt_toggle("Mode VRS Mali-G720", &g_settings.vrs_mali, true,
-               "Variable Rate Shading on Mali-G720 / Immortalis Gen4: applies a reduced fragment shading rate (2x2) "
-               "on the post-processing passes (SMAA, FXAA, upscalers). Requires VK_KHR_fragment_shading_rate "
-               "support in the driver. Off: full-rate post passes. Applies at once.");
-    opt_toggle("Compression AFBC avancée", &g_settings.afbc_advanced, true,
-               "Advanced AFBC (Arm Frame Buffer Compression) on Mali: keeps render targets compressed through their "
-               "format list, reducing bandwidth. Off: each pass's loads and stores move the images whole (no compression). "
-               "Applies at once; restart the app for all textures.");
-    static const char *thermal_modes[] = {"Auto (cap thermique)", "Performance (maintient le taux)", "Équilibré (statut seulement)"};
-    opt_choice("Mode performance thermique", &g_settings.thermal_perf, thermal_modes, 3, 0,
-               "Thermal performance mode for the Dimensity chipset. Auto: the thermal cap drops to 30 fps when hot "
-               "(Android status SEVERE or headroom forecast). Performance: holds the chosen frame rate while hot, "
-               "no app-level drop. Balanced: only the Android thermal status triggers a drop, not the headroom forecast. "
-               "Applies at once.");
-    opt_toggle("Soumission agressive (expÃ©rimental)", &g_settings.turbo_mali, false,
-               "Soumission agressive (expÃ©rimental) : rÃ©duit les barriÃ¨res de synchronisation et avance la soumission GPU. "
-               "Peut amÃ©liorer les FPS sur Mali-G720 / Immortalis Gen4 mais risque d'instabilitÃ© (artefacts, crashs). "
-               "NÃ©cessite Mali-G720 / Immortalis Gen4. DÃ¨SACTIVÃ¨ par dÃ©faut. Applique au prochain dÃ©marrage du jeu.");
-    opt_toggle("Compilation de shaders asynchrone", &g_settings.async_shader_compile, true,
-               "Asynchronous shader compilation: compiles shaders on background threads while the game runs, "
-               "reducing stutter on first use of new materials. Uses dedicated worker threads. "
-               "On by default for Mali-G720. Applies at once.");
-    opt_toggle("Accélération matérielle ASTC", &g_settings.astc_hw_accel, true,
-               "ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback. "
-               "On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths, "
-               "significantly reducing texture upload times and memory bandwidth. "
-               "On by default for Mali-G720. Applies at next game start; restart the app for all textures.");
+    if (vk_mali_detected()) {  // (the Mali GPUs: ARM Immortalis Mali, vendorID 0x13B5 - their own options, the others aren't Mali)
+        opt_section(tr("GPU Mali"));
+        opt_toggle(tr("Variable Rate Shading"), &g_settings.vrs_mali, true,
+                   tr("Mali-G720 / Immortalis Gen4: applies a reduced fragment shading rate (2x2) "
+                      "on the post-processing passes (SMAA, FXAA, upscalers). Requires VK_KHR_fragment_shading_rate "
+                      "support in the driver. Off: full-rate post passes. Applies at once."));
+        opt_toggle(tr("Advanced AFBC Compression"), &g_settings.afbc_advanced, true,
+                   tr("Advanced AFBC (Arm Frame Buffer Compression) on Mali: keeps render targets compressed through their "
+                      "format list, reducing bandwidth. Off: each pass's loads and stores move the images whole (no "
+                      "compression). Applies at once; restart the app for all textures."));
+        const char *thermal_modes[] = {tr("Auto (thermal cap)"), tr("Performance (holds the rate)"),
+                                      tr("Balanced (status only)")};
+        opt_choice(tr("Thermal Performance Mode"), &g_settings.thermal_perf, thermal_modes, 3, 0,
+                   tr("Thermal performance mode for the Dimensity chipset. Auto: the thermal cap drops to 30 fps when hot "
+                      "(Android status SEVERE or headroom forecast). Performance: holds the chosen frame rate while hot, "
+                      "no app-level drop. Balanced: only the Android thermal status triggers a drop, not the headroom "
+                      "forecast. Applies at once."));
+        opt_toggle(tr("Aggressive Submission"), &g_settings.turbo_mali, false,
+                   tr("Aggressive submission (experimental): reduces the synchronization barriers and advances the GPU "
+                      "submission. Can improve the frame rate on Mali-G720 / Immortalis Gen4 but risks instability "
+                      "(artifacts, crashes). Requires Mali-G720 / Immortalis Gen4. Off by default. Applies at next game "
+                      "start."));
+        opt_toggle(tr("Asynchronous Shader Compilation"), &g_settings.async_shader_compile, true,
+                   tr("Asynchronous shader compilation: compiles shaders on background threads while the game runs, "
+                      "reducing stutter on first use of new materials. Uses dedicated worker threads. "
+                      "On by default for Mali-G720. Applies at once."));
+        opt_toggle(tr("ASTC Hardware Acceleration"), &g_settings.astc_hw_accel, true,
+                   tr("ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback. "
+                      "On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths, "
+                      "significantly reducing texture upload times and memory bandwidth. "
+                      "On by default for Mali-G720. Applies at next game start; restart the app for all textures."));
+    }
 #endif
     opt_end();
 }

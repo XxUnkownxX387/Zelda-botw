@@ -585,6 +585,7 @@ extern "C" const char *vk_driver_rejected(void);  // (runtime/nvn/vulkan/android
 extern "C" const char *vk_driver_desc(void);      // (its own name and version: runtime/nvn/vulkan/device.c)
 extern "C" bool vk_driver_is_turnip(void);
 extern "C" const char *vk_gpu_desc(void);  // ("Adreno (TM) 830 - Turnip")
+extern "C" bool vk_mali_detected(void);    // (runtime/nvn/vulkan/device.c: Mali, the ARM Mali GPUs - vendorID 0x13B5)
 static std::string g_log_folder;  // its name ("Download/BOTWRecomp"), "" with none
 static bool g_log_folder_read;
 
@@ -1640,47 +1641,50 @@ static void prelaunch_tab(float sc) {
         changed |= ImGui::Checkbox(tr("Warm up shaders at start"), &g_settings.prewarm);
         ImGui::TextDisabled("%s", tr("Pre-build shader pipelines during loading screens to reduce stutter. On by default."));
         ImGui::Spacing();
-        ImGui::Text("%s", tr("Mali host import (game memory on GPU)"));
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const char *mali_opts[] = {tr("Auto"), tr("Off"), tr("On")};
-        int mali_idx = g_settings.mali_host_import + 1;  // -1->0, 0->1, 1->2
-        if (mali_idx < 0) mali_idx = 0;
-        if (mali_idx > 2) mali_idx = 2;
-        changed |= ImGui::Combo("##mali_host_import", &mali_idx, mali_opts, 3);
-        if (mali_idx != g_settings.mali_host_import + 1) {
-            g_settings.mali_host_import = mali_idx - 1;
-            changed = true;
+        if (vk_mali_detected()) {  // (the Mali GPUs: ARM Immortalis Mali, vendorID 0x13B5 - their own options)
+            heading(tr("GPU Mali"));  // (the Mali options: the Mali GPUs and their driver)
+            ImGui::Text("%s", tr("Mali host import (game memory on GPU)"));
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const char *mali_opts[] = {tr("Auto"), tr("Off"), tr("On")};
+            int mali_idx = g_settings.mali_host_import + 1;  // -1->0, 0->1, 1->2
+            if (mali_idx < 0) mali_idx = 0;
+            if (mali_idx > 2) mali_idx = 2;
+            changed |= ImGui::Combo("##mali_host_import", &mali_idx, mali_opts, 3);
+            if (mali_idx != g_settings.mali_host_import + 1) {
+                g_settings.mali_host_import = mali_idx - 1;
+                changed = true;
+            }
+            ImGui::TextDisabled("%s", tr("Allow importing the game's memory as a GPU buffer via VK_EXT_external_memory_host. "
+                                      "Auto: on for Mali GPU generation >= 710, driver version < r54, RAM >= 11 GB. "
+                                      "May cause missing text or crashes on some Mali drivers. Applies when BOTWRecompAndroid restarts."));
+            ImGui::Spacing();
+            ImGui::Text("%s", tr("VRAM budget"));
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const char *vram_opts[] = {tr("Auto"), tr("Unlimited"), "512 MB", "1024 MB", "1536 MB", "2048 MB", "3072 MB", "4096 MB"};
+            int vram_idx = 0;
+            if (g_settings.max_gpu_mem_mb == -1) vram_idx = 0;  // Auto
+            else if (g_settings.max_gpu_mem_mb == 0) vram_idx = 1;  // Unlimited
+            else if (g_settings.max_gpu_mem_mb == 512) vram_idx = 2;
+            else if (g_settings.max_gpu_mem_mb == 1024) vram_idx = 3;
+            else if (g_settings.max_gpu_mem_mb == 1536) vram_idx = 4;
+            else if (g_settings.max_gpu_mem_mb == 2048) vram_idx = 5;
+            else if (g_settings.max_gpu_mem_mb == 3072) vram_idx = 6;
+            else if (g_settings.max_gpu_mem_mb == 4096) vram_idx = 7;
+            changed |= ImGui::Combo("##max_gpu_mem_mb", &vram_idx, vram_opts, 8);
+            if (vram_idx == 0) g_settings.max_gpu_mem_mb = -1;  // Auto
+            else if (vram_idx == 1) g_settings.max_gpu_mem_mb = 0;
+            else if (vram_idx == 2) g_settings.max_gpu_mem_mb = 512;
+            else if (vram_idx == 3) g_settings.max_gpu_mem_mb = 1024;
+            else if (vram_idx == 4) g_settings.max_gpu_mem_mb = 1536;
+            else if (vram_idx == 5) g_settings.max_gpu_mem_mb = 2048;
+            else if (vram_idx == 6) g_settings.max_gpu_mem_mb = 3072;
+            else if (vram_idx == 7) g_settings.max_gpu_mem_mb = 4096;
+            ImGui::TextDisabled("%s", tr("VRAM budget for textures+ring+buffer cache. -1 = Auto (Mali: ~35% of total RAM, "
+                                      "min(35%, 3584 MB on Mali-G720 with >= 10.5 GB); 0 = unlimited; >0 = a fixed budget in MB. "
+                                      "When exceeded, least-recently-used non-render-target textures are evicted. "
+                                      "Applies on next area entry."));
+            ImGui::Spacing();
         }
-        ImGui::TextDisabled("%s", tr("Allow importing the game's memory as a GPU buffer via VK_EXT_external_memory_host. "
-                                  "Auto: on for Mali GPU generation >= 710, driver version < r54, RAM >= 11 GB. "
-                                  "May cause missing text or crashes on some Mali drivers. Applies when BOTWRecompAndroid restarts."));
-        ImGui::Spacing();
-        ImGui::Text("%s", tr("VRAM budget"));
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const char *vram_opts[] = {tr("Auto"), tr("Unlimited"), "512 MB", "1024 MB", "1536 MB", "2048 MB", "3072 MB", "4096 MB"};
-        int vram_idx = 0;
-        if (g_settings.max_gpu_mem_mb == -1) vram_idx = 0;  // Auto
-        else if (g_settings.max_gpu_mem_mb == 0) vram_idx = 1;  // Unlimited
-        else if (g_settings.max_gpu_mem_mb == 512) vram_idx = 2;
-        else if (g_settings.max_gpu_mem_mb == 1024) vram_idx = 3;
-        else if (g_settings.max_gpu_mem_mb == 1536) vram_idx = 4;
-        else if (g_settings.max_gpu_mem_mb == 2048) vram_idx = 5;
-        else if (g_settings.max_gpu_mem_mb == 3072) vram_idx = 6;
-        else if (g_settings.max_gpu_mem_mb == 4096) vram_idx = 7;
-        changed |= ImGui::Combo("##max_gpu_mem_mb", &vram_idx, vram_opts, 8);
-        if (vram_idx == 0) g_settings.max_gpu_mem_mb = -1;  // Auto
-        else if (vram_idx == 1) g_settings.max_gpu_mem_mb = 0;
-        else if (vram_idx == 2) g_settings.max_gpu_mem_mb = 512;
-        else if (vram_idx == 3) g_settings.max_gpu_mem_mb = 1024;
-        else if (vram_idx == 4) g_settings.max_gpu_mem_mb = 1536;
-        else if (vram_idx == 5) g_settings.max_gpu_mem_mb = 2048;
-        else if (vram_idx == 6) g_settings.max_gpu_mem_mb = 3072;
-        else if (vram_idx == 7) g_settings.max_gpu_mem_mb = 4096;
-        ImGui::TextDisabled("%s", tr("VRAM budget for textures+ring+buffer cache. -1 = Auto (Mali: ~35% of total RAM, "
-                                  "min(35%, 3584 MB on Mali-G720 with >= 10.5 GB); 0 = unlimited; >0 = a fixed budget in MB. "
-                                  "When exceeded, least-recently-used non-render-target textures are evicted. "
-                                  "Applies on next area entry."));
-        ImGui::Spacing();
         ImGui::Text("%s", tr("Driver variables"));  // (#227: g_settings.driver_env, vulkan/device.c)
         ImGui::SetNextItemWidth(-FLT_MIN);
         changed |= ImGui::InputTextWithHint("##driverenv", "FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1", g_settings.driver_env,

@@ -28,6 +28,9 @@ void vk_device_fault_report(void);
 void vk_android_load(void);  // android_driver.c: the Vulkan driver (adrenotools / system) into volk
 const char *vk_driver_rejected(void);  // (the chosen driver package the system's stood in for; "" none)
 void vk_wait_ready(void);    // device.c: until the device exists (the window's thread makes it)
+// Mali (ARM Immortalis Mali, the Mali-G720 family): the Mali GPUs (vendorID 0x13B5) - their own options are only
+// shown when it is the GPU in use (device.c)
+bool vk_mali_detected(void);
 #endif
 #define VK_CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { if (r_ == VK_ERROR_DEVICE_LOST) vk_device_fault_report(); \
     FATAL("%s failed: %d (%s:%d)\n", #x, r_, __FILE__, __LINE__); } } while (0)
