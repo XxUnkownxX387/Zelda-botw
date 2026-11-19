@@ -31,6 +31,14 @@ static void vram_budget_init(void) {
         g_vram_budget_bytes = (uint64_t)g_settings.max_gpu_mem_mb * 1024 * 1024;
         LOG("[vk] VRAM budget: %d MB\n", g_settings.max_gpu_mem_mb);
     }
+    // (recount the used bytes from the live textures: the running counter is reset from g_live at init)
+    uint64_t used = 0;
+    for (int i = 0; i < g_nlive; i++) {
+        NvnTexture *t = g_live[i];
+        TexBackend *b = t ? (TexBackend *)t->backend : NULL;
+        if (b && b->mem_size > 0) used += b->mem_size;
+    }
+    g_vram_used_bytes = used;
 }
 
 static void vram_budget_add(uint64_t size) {
@@ -50,28 +58,30 @@ static void vram_budget_maybe_evict(uint64_t current_frame) {
     uint64_t frame = renderer_present_count();
     if (frame == current_frame) return;  // already processed this frame
 
-    // Find LRU non-render-target, recreatable texture to evict.
+    // Evict in a loop (max 8 textures per frame) until the used memory is back under the budget: each
+    // eviction frees a recreatable texture, which the game re-uploads from the guest memory when it draws it again.
     // Recreatable = not a render target (rs_group == RS_NONE), not GPU-owned,
     // and can be re-uploaded from guest memory (dynamic or host-uploaded).
     // Also skip recently used (last 2 frames - fixed unsigned underflow).
-    NvnTexture *victim = NULL;
-    uint64_t oldest = UINT64_MAX;
-    for (int i = 0; i < g_nlive; i++) {
-        NvnTexture *t = g_live[i];
-        TexBackend *b = t ? (TexBackend *)t->backend : NULL;
-        if (!b) continue;
-        // Skip render targets
-        if (b->rs_group != RS_NONE) continue;
-        // Skip GPU-owned textures (not recreatable from guest memory)
-        if (b->gpu_owned) continue;
-        // Skip recently used (last 2 frames) - fix unsigned underflow
-        if (frame > 2 && b->last_used_frame > frame - 2) continue;
-        if (b->last_used_frame < oldest) {
-            oldest = b->last_used_frame;
-            victim = t;
+    for (int evicted = 0; evicted < 8 && g_vram_used_bytes > g_vram_budget_bytes; evicted++) {
+        NvnTexture *victim = NULL;
+        uint64_t oldest = UINT64_MAX;
+        for (int i = 0; i < g_nlive; i++) {
+            NvnTexture *t = g_live[i];
+            TexBackend *b = t ? (TexBackend *)t->backend : NULL;
+            if (!b) continue;
+            // Skip render targets
+            if (b->rs_group != RS_NONE) continue;
+            // Skip GPU-owned textures (not recreatable from guest memory)
+            if (b->gpu_owned) continue;
+            // Skip recently used (last 2 frames - fixed unsigned underflow)
+            if (frame > 2 && b->last_used_frame > frame - 2) continue;
+            if (b->last_used_frame < oldest) {
+                oldest = b->last_used_frame;
+                victim = t;
+            }
         }
-    }
-    if (victim) {
+        if (!victim) break;  // (nothing recreatable left: stop here, the budget stays over)
         TexBackend *vb = victim->backend ? (TexBackend *)victim->backend : NULL;
         LOG("[vk] VRAM budget exceeded (%llu MB > %d MB): evicting texture %p (last used frame %llu, %llu MB)\n",
             (unsigned long long)(g_vram_used_bytes >> 20), g_settings.max_gpu_mem_mb,
@@ -80,6 +90,9 @@ static void vram_budget_maybe_evict(uint64_t current_frame) {
         extern void backend_texture_destroyed(NvnTexture *t);
         backend_texture_destroyed(victim);
     }
+    if (g_vram_used_bytes > g_vram_budget_bytes)
+        LOG("[vk] VRAM budget still exceeded (%llu MB > %d MB) after the eviction loop: stop here (max 8 textures/frame)\n",
+            (unsigned long long)(g_vram_used_bytes >> 20), g_settings.max_gpu_mem_mb);
 }
 
 // Low-memory watchdog (Mali-G720, 12 GB LPDDR5X): if MemAvailable drops under the threshold,
@@ -926,6 +939,8 @@ static TexBackend *tex_backend(NvnTexture *t) {
     create_image(t, b);
     t->backend = b;
     live_add(t, b);
+    LOG("[vk] VRAM: texture %p re-uploaded from guest memory (addr %llx, %llu MB)\n", (void *)t, (unsigned long long)t->addr,
+        (unsigned long long)(b->mem_size >> 20));
     return b;
 }
 
