@@ -2330,8 +2330,7 @@ void backend_init(void) {
         g_vk.sc_count);
     vk_pipeline_cache_start_periodic_save();
 #ifdef __ANDROID__
-    extern void nativeApplySustainedPerfMode(void);
-    nativeApplySustainedPerfMode();
+    plat_sustained_perf_mode(g_settings.sustained_perf);
 #endif
 }
 

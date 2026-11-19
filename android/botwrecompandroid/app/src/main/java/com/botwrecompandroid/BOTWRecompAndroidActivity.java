@@ -68,8 +68,6 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     private static native void nativeDeviceStats(float battTempC, float battPct, float watts, int thermal, float headroom, int plugged);
     // Pipeline cache: save on pause
     private static native void nativeSavePipelineCache();
-    // Sustained Performance Mode: apply at game start
-    private static native void nativeApplySustainedPerfMode();
     // the start screen (runtime/ui/launcher.mm)
     private static native int nativeGameVersion(byte[] head);
     private static native void nativeImportLooking();  // (the picked folder is being searched: busy, and said so)
@@ -174,21 +172,30 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     }
 
     // Sustained Performance Mode (API 24+)
+    // Helper: check if sustained performance mode is supported (via PowerManager, API 24+)
+    private boolean isSustainedPerfSupported() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm == null) return false;
+            // isSustainedPerformanceModeSupported() added in API 24
+            return pm.isSustainedPerformanceModeSupported();
+        } catch (Throwable t) {
+            Log.w(TAG, "isSustainedPerfSupported: " + t);
+            return false;
+        }
+    }
+
     // Called from native when sustained_perf setting changes
     public void setSustainedPerformanceMode(boolean on) {
         if (android.os.Build.VERSION.SDK_INT < 24) return;
         runOnUiThread(() -> {
             try {
-                // Check if sustained performance mode is supported (API 29+)
-                if (android.os.Build.VERSION.SDK_INT >= 29) {
-                    boolean supported = getWindow().isSustainedPerformanceModeSupported();
-                    if (!supported) {
-                        Log.i(TAG, "setSustainedPerformanceMode: not supported on this device");
-                        return;
-                    }
+                if (!isSustainedPerfSupported()) {
+                    Log.i(TAG, "setSustainedPerformanceMode: not supported on this device");
+                    return;
                 }
                 getWindow().setSustainedPerformanceMode(on);
-                Log.i(TAG, "setSustainedPerformanceMode: " + on + " (supported=" + (android.os.Build.VERSION.SDK_INT >= 29 ? getWindow().isSustainedPerformanceModeSupported() : "unknown") + ")");
+                Log.i(TAG, "setSustainedPerformanceMode: " + on + " (supported=" + isSustainedPerfSupported() + ")");
             } catch (Throwable t) {
                 Log.w(TAG, "setSustainedPerformanceMode: " + t);
             }
@@ -200,12 +207,9 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
         if (android.os.Build.VERSION.SDK_INT < 24) return;
         runOnUiThread(() -> {
             try {
-                if (android.os.Build.VERSION.SDK_INT >= 29) {
-                    boolean supported = getWindow().isSustainedPerformanceModeSupported();
-                    if (!supported) {
-                        Log.i(TAG, "applySustainedPerformanceMode: not supported on this device");
-                        return;
-                    }
+                if (!isSustainedPerfSupported()) {
+                    Log.i(TAG, "applySustainedPerformanceMode: not supported on this device");
+                    return;
                 }
                 // Read the current setting from native
                 // For now, we just ensure the mode is applied when the window gains focus

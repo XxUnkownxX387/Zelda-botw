@@ -1370,24 +1370,6 @@ void plat_adpf_sustained_cleanup(void) {
     pthread_mutex_unlock(&adpf_sustained_lock);
 }
 
-// Called from native to apply sustained performance mode at game start
-JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeApplySustainedPerfMode(
-        JNIEnv *env, jclass cls_unused) {
-    (void)env; (void)cls_unused;
-    // This calls the Java applySustainedPerformanceMode method
-    jobject act = (jobject)SDL_GetAndroidActivity();
-    if (!act) return;
-    jclass act_cls = (*env)->GetObjectClass(env, act);
-    if (!act_cls) return;
-    jmethodID m = (*env)->GetMethodID(env, act_cls, "applySustainedPerformanceMode", "()V");
-    if (m) {
-        (*env)->CallVoidMethod(env, act, m);
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    }
-    (*env)->DeleteLocalRef(env, act_cls);
-    (*env)->DeleteLocalRef(env, act);
-}
-
 // Get current thermal headroom (PowerManager.getThermalHeadroom, 1.0 = throttling begins, -1 = unknown)
 float plat_thermal_headroom(void) {
     pthread_mutex_lock(&g_ds_lock);
