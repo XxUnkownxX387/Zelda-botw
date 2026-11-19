@@ -513,6 +513,7 @@ extern "C" void renderer_get_scale(float *sx, float *sy);        // (the final i
 extern "C" int input_pad_family(void);  // runtime/hle/input.c
 extern "C" double output_scale_dynamic_factor(void);
 extern "C" bool vk_mali_detected(void);  // (runtime/nvn/vulkan/device.c: Mali, the ARM Mali GPUs - vendorID 0x13B5)
+extern "C" const char *rt_data_root(void);  // runtime/paths.c
 
 static void tab_display(void) {
     float scale = ImGui::GetFontSize() / 34;
@@ -732,6 +733,20 @@ static void tab_display(void) {
             plat_sustained_perf_mode(g_settings.sustained_perf);
 #endif
         }
+    // Shader Cache (Vulkan pipeline cache)
+    if (opt_toggle(tr("Shader Cache"), &g_settings.shader_cache, true,
+                   tr("Vulkan pipeline cache: persistently stores compiled pipelines in <data root>/pipeline_cache.bin "
+                      "to speed up subsequent runs. Validates header (vendorID, deviceID, pipelineCacheUUID) at load. "
+                      "Saved on app pause and every 5 minutes. Off: no cache file used, pipelines compiled cold. "
+                      "Applies at next game start."))) {
+        settings_save();
+    }
+    if (opt_button(tr("Clear Shader Cache"), tr("Deletes <data root>/pipeline_cache.bin. The cache will be rebuilt on the next game start."))) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
+        remove(path);
+        LOG("[vk-cache] shader cache cleared by user\n");
+    }
 #endif
     opt_end();
 }

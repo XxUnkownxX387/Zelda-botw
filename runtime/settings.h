@@ -86,6 +86,10 @@ typedef struct {
     // Sustained Performance Mode (API 24+): tells Android the app wants predictable, sustained performance.
     // Only effective when the window is focused; the OS may grant it (Window.setSustainedPerformanceMode).
     bool sustained_perf;
+    // Vulkan pipeline cache (shader cache): persistently stores compiled pipelines to speed up subsequent runs.
+    // Loaded from <data root>/pipeline_cache.bin at startup (validates vendorID, deviceID, pipelineCacheUUID).
+    // Saved on app pause and every 5 minutes. Off: no cache file used, pipelines compiled cold.
+    bool shader_cache;
     // Driver compatibility (the start screen's Settings > Prelaunch, ui/launcher.mm; from LASRecompAndroid), for GPUs
     // where a Turnip path draws wrong: read when the game starts (gpu_heap, inplace_reads) or when the app starts
     // (turnip_lrz, log_file). -1 Automatic: on for the Adreno 8xx GPUs these paths were made on, off elsewhere

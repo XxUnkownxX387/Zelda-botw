@@ -183,6 +183,10 @@ void vk_views_forget(TexBackend *b);  // drop (deferred) the cached views of an 
 uint64_t vk_frame_counter(void);
 // VRAM budget eviction (textures.c): call once per frame at present time, on render thread, GPU drained
 void vram_budget_evict_if_needed(void);
+// Pipeline cache (device.c): persistent shader cache in <data root>/pipeline_cache.bin
+void vk_pipeline_cache_save(void);                      // immediate save (called on pause)
+void vk_pipeline_cache_start_periodic_save(void);       // start 5-min periodic save thread
+void vk_pipeline_cache_stop_periodic_save(void);        // stop periodic save thread
 
 // ---- shaders / pipelines (shaders.c)
 VkShaderModule vk_compile_glsl(const char *src, int stage, const char *name);  // NULL on failure (logged)

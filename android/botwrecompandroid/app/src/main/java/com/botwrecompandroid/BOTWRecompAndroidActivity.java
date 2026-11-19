@@ -68,6 +68,8 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     private static native void nativeDeviceStats(float battTempC, float battPct, float watts, int thermal, float headroom, int plugged);
     // ADPF (Android Dynamic Performance Framework, API 33+): frame time reporting
     private static native void nativeReportFrame(long frameDurationNs);
+    // Pipeline cache: save on pause
+    private static native void nativeSavePipelineCache();
     // the start screen (runtime/ui/launcher.mm)
     private static native int nativeGameVersion(byte[] head);
     private static native void nativeImportLooking();  // (the picked folder is being searched: busy, and said so)
@@ -173,6 +175,7 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
         stats.removeCallbacks(report);
         if (watchMap != null) watchMap.pause();
         closeAdpf();
+        nativeSavePipelineCache();  // save Vulkan pipeline cache
         super.onPause();
     }
 

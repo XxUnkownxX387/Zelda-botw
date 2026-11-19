@@ -1028,30 +1028,38 @@ static void create_device(void) {
                                   .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = g_vk.qfam};
     VK_CHECK(vkCreateCommandPool(g_vk.dev, &pi, NULL, &g_vk.pool));
 
-    // pipeline cache: cache/vk_pipelines.bin (written by vk_pipeline_cache_save; LARECOMP_VK_NO_PIPELINE_CACHE=1: neither
-    // read nor written - every pipeline compiled cold, for measuring)
+    // pipeline cache: <data root>/pipeline_cache.bin (written by vk_pipeline_cache_save; LARECOMP_VK_NO_PIPELINE_CACHE=1:
+    // neither read nor written - every pipeline compiled cold, for measuring).
+    // Controlled by g_settings.shader_cache (menu option "Shader Cache"). Validates header: vendorID, deviceID,
+    // pipelineCacheUUID. Logs load time.
     size_t sz = 0;
     void *data = NULL;
-    FILE *fp = getenv("LARECOMP_VK_NO_PIPELINE_CACHE") ? NULL : fopen("cache/vk_pipelines.bin", "rb");
-    if (fp) {
-#ifdef __ANDROID__  // (a size cap and the public header checked: a file from another driver or a cut-off write)
-        long length = -1;
-        if (!fseek(fp, 0, SEEK_END)) length = ftell(fp);
-        if (length >= 32 && (unsigned long)length <= VK_BACKEND_PIPELINE_CACHE_MAX && !fseek(fp, 0, SEEK_SET)) {
-            data = malloc((size_t)length);
-            if (data && fread(data, 1, (size_t)length, fp) == (size_t)length &&
-                vk_backend_cache_compatible(data, (size_t)length, &g_vk.props)) sz = (size_t)length;
+    if (g_settings.shader_cache && !getenv("LARECOMP_VK_NO_PIPELINE_CACHE")) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
+        FILE *fp = fopen(path, "rb");
+        if (fp) {
+            uint64_t t0 = plat_now_ns();
+            long length = -1;
+            if (!fseek(fp, 0, SEEK_END)) length = ftell(fp);
+            if (length >= 32 && (unsigned long)length <= VK_BACKEND_PIPELINE_CACHE_MAX && !fseek(fp, 0, SEEK_SET)) {
+                data = malloc((size_t)length);
+                if (data && fread(data, 1, (size_t)length, fp) == (size_t)length &&
+                    vk_backend_cache_compatible(data, (size_t)length, &g_vk.props)) sz = (size_t)length;
+            }
+            fclose(fp);
+            if (!sz) {
+                LOG("[vk-cache] ignoring unreadable, malformed or incompatible pipeline cache (%s); starting empty\n", path);
+                free(data); data = NULL;
+            } else {
+                uint64_t t1 = plat_now_ns();
+                LOG("[vk-cache] loaded %zu bytes from %s in %.2f ms\n", sz, path, (t1 - t0) / 1e6);
+            }
+        } else {
+            LOG("[vk-cache] no pipeline cache file at %s, starting empty\n", path);
         }
-        if (!sz) { LOG("[vk-cache] ignoring unreadable, malformed or incompatible pipeline cache; starting empty\n");
-            free(data); data = NULL; }
-#else
-        fseek(fp, 0, SEEK_END);
-        sz = (size_t)ftell(fp);
-        fseek(fp, 0, SEEK_SET);
-        data = malloc(sz);
-        if (fread(data, 1, sz, fp) != sz) sz = 0;
-#endif
-        fclose(fp);
+    } else if (!g_settings.shader_cache) {
+        LOG("[vk-cache] shader cache disabled by setting\n");
     }
     VkPipelineCacheCreateInfo pc = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO, .initialDataSize = sz,
                                     .pInitialData = data};
@@ -1068,19 +1076,52 @@ static void create_device(void) {
 
 void vk_pipeline_cache_save(void) {
     if (getenv("LARECOMP_VK_NO_PIPELINE_CACHE")) return;
+    if (!g_settings.shader_cache) return;
     size_t sz = 0;
     if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, NULL) != VK_SUCCESS || !sz) return;
     void *data = malloc(sz);
     if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, data) == VK_SUCCESS) {
-        mkdir("cache", 0755);
-        FILE *f = fopen("cache/vk_pipelines.bin.tmp", "wb");
+        char path[1024], tmp_path[1024];
+        snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
+        snprintf(tmp_path, sizeof tmp_path, "%s/pipeline_cache.bin.tmp", rt_data_root());
+        FILE *f = fopen(tmp_path, "wb");
         if (f) {
             bool ok = fwrite(data, 1, sz, f) == sz;
             fclose(f);
-            if (ok) { remove("cache/vk_pipelines.bin"); rename("cache/vk_pipelines.bin.tmp", "cache/vk_pipelines.bin"); }
+            if (ok) {
+                remove(path);
+                rename(tmp_path, path);
+                LOG("[vk-cache] saved %zu bytes to %s\n", sz, path);
+            }
         }
     }
     free(data);
+}
+
+// Periodic pipeline cache save (every 5 minutes) - called from a timer thread
+static pthread_t g_cache_save_thread = 0;
+static atomic_bool g_cache_save_running = ATOMIC_VAR_INIT(false);
+
+static void *cache_save_timer(void *arg) {
+    (void)arg;
+    while (atomic_load(&g_cache_save_running)) {
+        sleep(300);  // 5 minutes
+        if (!atomic_load(&g_cache_save_running)) break;
+        vk_pipeline_cache_save();
+    }
+    return NULL;
+}
+
+void vk_pipeline_cache_start_periodic_save(void) {
+    if (!g_settings.shader_cache) return;
+    if (atomic_load(&g_cache_save_running)) return;
+    atomic_store(&g_cache_save_running, true);
+    pthread_create(&g_cache_save_thread, NULL, cache_save_timer, NULL);
+    pthread_detach(g_cache_save_thread);
+}
+
+void vk_pipeline_cache_stop_periodic_save(void) {
+    atomic_store(&g_cache_save_running, false);
 }
 
 // ================================================================== swapchain
@@ -2040,6 +2081,7 @@ void vk_shaders_init(void);
 static void quick_exit_handler(void) {
     static int trace = -1;
     if (trace < 0) trace = getenv("LARECOMP_VK_TRACE") != NULL;
+    vk_pipeline_cache_stop_periodic_save();  // stop periodic save thread
     if (g_vk.dev) {
 #ifndef __ANDROID__
         if (trace) LOG("[vk] exit: waiting for the GPU\n");
@@ -2274,6 +2316,7 @@ void backend_init(void) {
     while (!atomic_load(&ui_ready)) SDL_Delay(1);
     LOG("[vk] %s, swapchain %ux%u, %u images\n", g_vk.props.deviceName, g_vk.sc_extent.width, g_vk.sc_extent.height,
         g_vk.sc_count);
+    vk_pipeline_cache_start_periodic_save();
 }
 
 // ---- in-place reboot (runtime/main.c teardown; main thread, guest threads stopped)
@@ -2282,7 +2325,9 @@ void backend_reset(void) {
 #ifdef __ANDROID__
     vk_async_drain();
 #endif
+    vk_pipeline_cache_stop_periodic_save();  // stop periodic save thread before reset
     vkDeviceWaitIdle(g_vk.dev);
+    vk_pipeline_cache_save();  // save on reset/reboot
     extern void vk_textures_reset(void);
     extern void vk_exec_reset(void);
     vk_textures_reset();

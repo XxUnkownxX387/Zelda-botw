@@ -780,6 +780,13 @@ JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nati
         (unsigned long long)threshold >> 20, low != 0, pss / 1024);
 }
 
+JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeSavePipelineCache(
+        JNIEnv *env, jclass cls) {
+    (void)env; (void)cls;
+    extern void vk_pipeline_cache_save(void);
+    vk_pipeline_cache_save();
+}
+
 static uint64_t read_u64(const char *path) {
     char buf[64] = {0};
     int fd = open(path, O_RDONLY | O_CLOEXEC);
