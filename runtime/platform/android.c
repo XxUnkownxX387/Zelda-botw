@@ -1325,33 +1325,14 @@ void plat_sustained_perf_mode(bool on) {
             (*env)->DeleteLocalRef(env, cls);
         }
         pthread_mutex_unlock(&adpf_sustained_lock);
+        // Release local ref to activity from SDL_GetAndroidActivity
+        (*env)->DeleteLocalRef(env, act);
     }
     if (!adpf_set_sustained_perf) return;
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
     if (!env || !adpf_activity_ref) return;
     
-    // Run on UI thread since setSustainedPerformanceMode must be called from UI thread
-    jclass cls = (*env)->GetObjectClass(env, adpf_activity_ref);
-    if (!cls) return;
-    jmethodID run_on_ui = (*env)->GetMethodID(env, cls, "runOnUiThread", "(Ljava/lang/Runnable;)V");
-    (*env)->DeleteLocalRef(env, cls);
-    if (!run_on_ui) {
-        // Fallback: call directly (may work if already on UI thread)
-        (*env)->CallVoidMethod(env, adpf_activity_ref, adpf_set_sustained_perf, on ? JNI_TRUE : JNI_FALSE);
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        return;
-    }
-    
-    // Create a Runnable to call setSustainedPerformanceMode on UI thread
-    jclass runnable_cls = (*env)->FindClass(env, "java/lang/Runnable");
-    jmethodID runnable_ctor = (*env)->GetMethodID(env, runnable_cls, "<init>", "()V");
-    jobject runnable = (*env)->NewObject(env, runnable_cls, runnable_ctor);
-    (*env)->DeleteLocalRef(env, runnable_cls);
-    if (!runnable) return;
-    
-    // We need to create an anonymous Runnable - use a simpler approach: call via reflection
-    // Actually, let's just call directly and log if it fails - the activity will handle it
-    (*env)->DeleteLocalRef(env, runnable);
+    // Java side (setSustainedPerformanceMode) already runs on UI thread via runOnUiThread
     (*env)->CallVoidMethod(env, adpf_activity_ref, adpf_set_sustained_perf, on ? JNI_TRUE : JNI_FALSE);
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }

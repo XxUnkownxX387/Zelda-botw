@@ -102,6 +102,8 @@ static uint64_t g_vram_budget_lowmem_orig = 0;  // original budget while the wat
 static int g_vram_budget_lowmem_armed = 0;
 
 static void vram_budget_lowmem_watchdog(void) {
+    static int frame_counter = 0;
+    if (++frame_counter % 120 != 0) return;  // Only check once every 120 frames
     if (g_vram_budget_bytes == 0) return;
     FILE *f = fopen("/proc/meminfo", "r");
     if (!f) return;

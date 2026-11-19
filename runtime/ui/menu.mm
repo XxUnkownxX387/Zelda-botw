@@ -697,32 +697,26 @@ static void tab_display(void) {
     if (vk_mali_detected()) {  // (the Mali GPUs: ARM Immortalis Mali, vendorID 0x13B5 - their own options, the others aren't Mali)
         opt_section(tr("GPU Mali"));
         // Mali GPU preset: applies a group of settings at once (user can still tweak individual settings afterward)
-        static const char *mali_preset_names[] = {tr("Custom (user settings)"), tr("Performance (max fps)"),
-                                                 tr("Balanced"), tr("Quality (best visuals)")};
+        static const char *mali_preset_names[] = {tr("Custom (user settings)"), tr("Performance"),
+                                                 tr("Balanced"), tr("Quality")};
         auto apply_mali_preset = [&](int preset) {
             switch (preset) {
                 case 1: {  // Performance
                     g_settings.vrs_mali = true;
-                    g_settings.max_gpu_mem_mb = -1;  // Auto (full budget)
+                    g_settings.max_gpu_mem_mb = -1;  // Auto
                     g_settings.shader_parallel = true;
-                    g_settings.res_mode = 1;  // 1x
-                    g_settings.fps_mode = 2;  // 60 fps
                     break;
                 }
                 case 2: {  // Balanced
                     g_settings.vrs_mali = true;
                     g_settings.max_gpu_mem_mb = -1;  // Auto
                     g_settings.shader_parallel = true;
-                    g_settings.res_mode = RES_DYNAMIC;  // Dynamic resolution
-                    g_settings.fps_mode = 2;  // 60 fps
                     break;
                 }
                 case 3: {  // Quality
                     g_settings.vrs_mali = false;  // Full rate for best quality
                     g_settings.max_gpu_mem_mb = -1;  // Auto
                     g_settings.shader_parallel = true;
-                    g_settings.res_mode = 2;  // 2x
-                    g_settings.fps_mode = 1;  // 30 fps
                     break;
                 }
                 default: break;  // Custom: keep current settings
@@ -732,16 +726,16 @@ static void tab_display(void) {
         };
         if (opt_choice(tr("Mali GPU Preset"), &g_settings.mali_preset, mali_preset_names, 4, 0,
                        tr("Quick configuration for Mali-G720 / Immortalis Gen4. "
-                          "Performance: VRS on, 1x resolution, 60 fps. "
-                          "Balanced: VRS on, Dynamic resolution, 60 fps. "
-                          "Quality: VRS off, 2x resolution, 30 fps. "
+                          "Performance: VRS on, shader parallel on, VRAM Auto. "
+                          "Balanced: VRS on, shader parallel on, VRAM Auto. "
+                          "Quality: VRS off, shader parallel on, VRAM Auto. "
                           "Custom: keep your current individual settings. "
                           "Each setting can still be changed below after selecting a preset."))) {
             apply_mali_preset(g_settings.mali_preset);
         }
         opt_toggle(tr("Variable Rate Shading"), &g_settings.vrs_mali, true,
                    tr("Mali-G720 / Immortalis Gen4: applies a reduced fragment shading rate (2x2) "
-                      "on the post-processing passes (SMAA, FXAA, upscalers). Requires VK_KHR_fragment_shading_rate "
+                      "on the intermediate SMAA passes (edges, weights). Requires VK_KHR_fragment_shading_rate "
                       "support in the driver. Off: full-rate post passes. Applies at once."));
         opt_toggle(tr("Advanced AFBC Compression"), &g_settings.afbc_advanced, true,
                    tr("Advanced AFBC (Arm Frame Buffer Compression) on Mali: keeps render targets compressed through their "
@@ -754,11 +748,6 @@ static void tab_display(void) {
                       "(Android status SEVERE or headroom forecast). Performance: holds the chosen frame rate while hot, "
                       "no app-level drop. Balanced: only the Android thermal status triggers a drop, not the headroom "
                       "forecast. Applies at once."));
-        opt_toggle(tr("Aggressive Submission"), &g_settings.turbo_mali, false,
-                   tr("Aggressive submission (experimental): reduces the synchronization barriers and advances the GPU "
-                      "submission. Can improve the frame rate on Mali-G720 / Immortalis Gen4 but risks instability "
-                      "(artifacts, crashes). Requires Mali-G720 / Immortalis Gen4. Off by default. Applies at next game "
-                      "start."));
         opt_toggle(tr("Asynchronous Shader Compilation"), &g_settings.async_shader_compile, true,
                    tr("Asynchronous shader compilation: compiles shaders on background threads while the game runs, "
                       "reducing stutter on first use of new materials. Uses dedicated worker threads. "
