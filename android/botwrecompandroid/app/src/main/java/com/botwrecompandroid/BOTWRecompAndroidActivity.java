@@ -94,7 +94,7 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     private static native void nativeDlcDone(int result, String detail);
     private static BOTWRecompAndroidActivity self;
     private WatchMapServer watchMap;
-    // ADPF (API 33+)
+    // ADPF (API 31+)
     private android.os.PerformanceHintManager perfHintManager;
     private android.os.PerformanceHintManager.Session perfHintSession;
     private long targetFrameDurationNs = 16666667L;  // default 60 fps = 16.67 ms
@@ -207,15 +207,15 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
 
     // Called from native (JNI) when ADPF is enabled and the frame target is known
     public void adpfCreateSession(long targetFrameDurationNs, int renderThreadId, int gameThreadId) {
-        if (android.os.Build.VERSION.SDK_INT < 33) return;
+        if (android.os.Build.VERSION.SDK_INT < 31) return;  // PerformanceHintManager added in API 31
         if (perfHintSession != null) return;  // already created
         try {
             this.targetFrameDurationNs = targetFrameDurationNs;
-            perfHintManager = (android.os.PerformanceHintManager) getSystemService(android.content.Context.PERFORMANCE_HINT_MANAGER_SERVICE);
+            perfHintManager = (android.os.PerformanceHintManager) getSystemService(android.content.Context.PERFORMANCE_HINT_SERVICE);
             if (perfHintManager == null) return;
             // Threads: render thread and game thread (both from native side)
             int[] threadIds = {renderThreadId, gameThreadId};
-            perfHintSession = perfHintManager.createSession(threadIds, targetFrameDurationNs);
+            perfHintSession = perfHintManager.createHintSession(threadIds, targetFrameDurationNs);
             Log.i(TAG, "ADPF session created: targetFrameDurationNs=" + targetFrameDurationNs + ", threads=" + renderThreadId + "," + gameThreadId);
         } catch (Throwable t) {
             Log.w(TAG, "ADPF createSession: " + t);

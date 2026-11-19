@@ -512,8 +512,10 @@ extern "C" void renderer_get_scene_scale(float *sx, float *sy);  // (vulkan/text
 extern "C" void renderer_get_scale(float *sx, float *sy);        // (the final image's)
 extern "C" int input_pad_family(void);  // runtime/hle/input.c
 extern "C" double output_scale_dynamic_factor(void);
+extern "C" double output_scale_thermal_dynamic_factor(void);
 extern "C" bool vk_mali_detected(void);  // (runtime/nvn/vulkan/device.c: Mali, the ARM Mali GPUs - vendorID 0x13B5)
 extern "C" const char *rt_data_root(void);  // runtime/paths.c
+extern "C" void plat_sustained_perf_mode(bool on);  // runtime/platform/android.c
 
 static void tab_display(void) {
     float scale = ImGui::GetFontSize() / 34;
@@ -779,7 +781,6 @@ static void tab_display(void) {
                       "the OS while the window is focused. The OS may grant it, lowering max clocks for stability. "
                       "Off by default. Applies at once when toggled."))) {
 #ifdef __ANDROID__
-            extern "C" void plat_sustained_perf_mode(bool on);
             plat_sustained_perf_mode(g_settings.sustained_perf);
 #endif
         }

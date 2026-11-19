@@ -12,3 +12,5 @@ typedef struct {
 // dw x dh: the window's drawable size in pixels; now: seconds; gpu_ms: GPU time of the last frame (< 0: unknown)
 void output_scale(double dw, double dh, bool reshape_allowed, double now, double gpu_ms, OutScale *o);
 double output_scale_dynamic_factor(void);
+// Thermal dynamic resolution factor (0.7..1.0), or 1.0 if disabled
+double output_scale_thermal_dynamic_factor(void);
