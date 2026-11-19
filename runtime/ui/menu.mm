@@ -697,11 +697,10 @@ static void tab_display(void) {
                "(Android status SEVERE or headroom forecast). Performance: holds the chosen frame rate while hot, "
                "no app-level drop. Balanced: only the Android thermal status triggers a drop, not the headroom forecast. "
                "Applies at once.");
-    opt_toggle("Mode Turbo Mali-G720", &g_settings.turbo_mali, false,
-               "Turbo mode for Mali-G720 / Immortalis Gen4: forces maximum GPU clocks, disables driver thermal throttling, "
-               "enables all Mali-G720 specific optimizations (VK_EXT_external_memory_host, VK_KHR_map_memory_placed, "
-               "aggressive shader compilation, maximum VRAM budget). Requires Mali-G720 / Immortalis Gen4. "
-               "May increase power consumption and heat. Applies at next game start.");
+    opt_toggle("Soumission agressive (expÃ©rimental)", &g_settings.turbo_mali, false,
+               "Soumission agressive (expÃ©rimental) : rÃ©duit les barriÃ¨res de synchronisation et avance la soumission GPU. "
+               "Peut amÃ©liorer les FPS sur Mali-G720 / Immortalis Gen4 mais risque d'instabilitÃ© (artefacts, crashs). "
+               "NÃ©cessite Mali-G720 / Immortalis Gen4. DÃ¨SACTIVÃ¨ par dÃ©faut. Applique au prochain dÃ©marrage du jeu.");
     opt_toggle("Compilation de shaders asynchrone", &g_settings.async_shader_compile, true,
                "Asynchronous shader compilation: compiles shaders on background threads while the game runs, "
                "reducing stutter on first use of new materials. Uses dedicated worker threads. "

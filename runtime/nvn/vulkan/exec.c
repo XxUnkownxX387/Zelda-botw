@@ -2117,18 +2117,7 @@ static void begin_pass(void) {
             chunk = e ? atol(e) : vk_driver_is_qualcomm() ? 0 : 2000;
         }
         extern int vk_ab(const char *what);
-        long ch = chunk > 0 && AB("chunk") == 1 ? 500 : chunk;
-        
-        // Mali-G720 turbo: much more aggressive early submission
-        // Submit after just 500µs of translation work to keep GPU fed continuously
-        bool is_mali_g720_turbo = false;
-        if (g_settings.turbo_mali && g_vk.props.vendorID == 0x13B5) {
-            const char *name = g_vk.props.deviceName;
-            if (strstr(name, "Mali-G720") || strstr(name, "Immortalis-G720")) {
-                is_mali_g720_turbo = true;
-            }
-        }
-        if (is_mali_g720_turbo) ch = 500;  // aggressive early submission
+    long ch = chunk > 0 && AB("chunk") == 1 ? 500 : chunk;
         
         if (ch > 0 && vk_async_on() && last_submit_ns && SDL_GetTicksNS() - last_submit_ns > (uint64_t)ch * 1000)
             renderer_submit();
@@ -2146,23 +2135,6 @@ static void begin_pass(void) {
     bool need_barrier = true;
     if (no_barrier) need_barrier = false;
     else if (AB("nobarrier") != 1) need_barrier = restart || pass_stored;
-    
-    // Mali-G720 optimization: on Mali-G720 with turbo mode, be more aggressive about skipping barriers
-    // since we know the render pass order and can rely on subpass-like behavior via dynamic rendering
-    bool is_mali_g720_turbo = false;
-#ifdef __ANDROID__
-    if (g_settings.turbo_mali && g_vk.props.vendorID == 0x13B5) {
-        const char *name = g_vk.props.deviceName;
-        if (strstr(name, "Mali-G720") || strstr(name, "Immortalis-G720")) {
-            is_mali_g720_turbo = true;
-        }
-    }
-#endif
-    if (is_mali_g720_turbo) {
-        // On Mali-G720 turbo: only need barrier on actual restart, not on pass_stored
-        // The GPU can pipeline passes more efficiently when we know there's no actual data hazard
-        need_barrier = restart;
-    }
     
     if (need_barrier) vk_full_barrier(cb);  // passes, copies and dispatches see each other's results
     pass_stored = false;  // (a new pass starts: the previous pass's stores are now accounted for)

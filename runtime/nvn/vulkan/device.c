@@ -15,6 +15,7 @@
 
 #include "../../paths.h"
 #include "../../settings.h"
+#include "../../platform.h"
 #include "../../ui/menu.h"
 #include "vk.h"
 #include "framegen.h"
@@ -567,23 +568,10 @@ static void create_device(void) {
     
     // Detect Mali-G720 specifically for optimized settings
     bool is_mali_g720 = mali && strstr(g_vk.props.deviceName, "Mali-G720");
-    bool is_high_ram = false;
-    {
-        FILE *meminfo = fopen("/proc/meminfo", "r");
-        if (meminfo) {
-            char line[256];
-            while (fgets(line, sizeof line, meminfo)) {
-                if (strncmp(line, "MemTotal:", 9) == 0) {
-                    unsigned long kb = 0;
-                    sscanf(line + 9, "%lu", &kb);
-                    int total_ram_gb = (int)((kb + 1024 * 1024 - 1) / (1024 * 1024));
-                    is_high_ram = (total_ram_gb >= 12);
-                    break;
-                }
-            }
-            fclose(meminfo);
-        }
-    }
+    // Use cached total RAM from platform layer (reads /proc/meminfo once, caches result)
+    uint32_t total_mb = platform_total_ram_mb();
+    // High RAM: >= 10500 MB (~12 GB device shows ~11 GB)
+    bool is_high_ram = (total_mb >= 10500);
     
     if (g_vk.host_import) {
         const char *e = getenv("LARECOMP_VK_HOST_IMPORT");

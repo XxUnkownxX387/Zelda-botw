@@ -1261,3 +1261,23 @@ void plat_adpf_stats(PlatAdpfStats *out) {
     out->render_cpu = s_render_cpu;
     pthread_mutex_unlock(&adpf_lock);
 }
+
+// Total system RAM in MB (reads /proc/meminfo once, caches result)
+uint32_t platform_total_ram_mb(void) {
+    static int cached_mb = -1;
+    if (cached_mb >= 0) return (uint32_t)cached_mb;
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "MemTotal:", 9) == 0) {
+            unsigned long kb = 0;
+            sscanf(line + 9, "%lu", &kb);
+            cached_mb = (int)((kb + 1024 - 1) / 1024);  // KB to MB, rounded up
+            break;
+        }
+    }
+    fclose(f);
+    if (cached_mb < 0) cached_mb = 0;
+    return (uint32_t)cached_mb;
+}

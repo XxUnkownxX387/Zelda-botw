@@ -7,6 +7,7 @@
 
 #include "hle.h"
 #include "input_bind.h"
+#include "platform.h"
 #ifdef __ANDROID__
 #include <SDL3/SDL.h>
 #include <sys/system_properties.h>
