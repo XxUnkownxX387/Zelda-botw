@@ -9,7 +9,6 @@
 
 #include "vk.h"
 #include "../astc.h"
-#include "../bc3_astc.h"
 #include "../renderer.h"
 #include "../texpatch.h"
 #include "../../settings.h"  // g_settings.max_gpu_mem_mb
@@ -315,19 +314,6 @@ static bool bc1_astc(void) {
 
 // The format a BC texture is decoded into without BC; *bpp: its bytes per texel (0: ASTC 4x4 blocks - bc1_to_astc)
 static VkFormat bc_target(VkFormat bc, uint32_t *bpp) {
-    // LARECOMP_BC3_ASTC=1: decode BC3/BC4/BC5 to ASTC 4x4 blocks
-    static int use_astc_bc3 = -1;
-    if (use_astc_bc3 < 0) use_astc_bc3 = getenv("LARECOMP_BC3_ASTC") ? atoi(getenv("LARECOMP_BC3_ASTC")) : 0;
-
-    if (use_astc_bc3 && (bc == VK_FORMAT_BC3_UNORM_BLOCK || bc == VK_FORMAT_BC3_SRGB_BLOCK)) {
-        *bpp = 0; return bc == VK_FORMAT_BC3_SRGB_BLOCK ? VK_FORMAT_ASTC_4x4_SRGB_BLOCK : VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
-    }
-    if (use_astc_bc3 && (bc == VK_FORMAT_BC4_UNORM_BLOCK || bc == VK_FORMAT_BC4_SNORM_BLOCK)) {
-        *bpp = 0; return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
-    }
-    if (use_astc_bc3 && (bc == VK_FORMAT_BC5_UNORM_BLOCK || bc == VK_FORMAT_BC5_SNORM_BLOCK)) {
-        *bpp = 0; return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
-    }
     switch (bc) {
     case VK_FORMAT_BC1_RGB_UNORM_BLOCK: case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
         if (bc1_astc()) { *bpp = 0; return VK_FORMAT_ASTC_4x4_UNORM_BLOCK; }
@@ -350,55 +336,14 @@ static bool is_bc(VkFormat f) { return f >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && f <
 
 // wb x hb blocks (bsize bytes each, rows of blocks) -> texels, rows of wb * 4 texels of bpp bytes
 static void bc_decode(VkFormat bc, const uint8_t *blocks, uint32_t wb, uint32_t hb, uint32_t bsize, uint8_t *out, uint32_t bpp) {
-    // LARECOMP_BC3_ASTC=1: decode BC3/BC4/BC5 directly to ASTC 4x4 blocks
-    // instead of decoding to RGBA8. This saves GPU memory on Mali GPUs.
-    static int use_astc = -1;
-    if (use_astc < 0) use_astc = getenv("LARECOMP_BC3_ASTC") ? atoi(getenv("LARECOMP_BC3_ASTC")) : 0;
-
-    if (use_astc && (bc == VK_FORMAT_BC3_UNORM_BLOCK || bc == VK_FORMAT_BC3_SRGB_BLOCK ||
-                     bc == VK_FORMAT_BC4_UNORM_BLOCK || bc == VK_FORMAT_BC4_SNORM_BLOCK ||
-                     bc == VK_FORMAT_BC5_UNORM_BLOCK || bc == VK_FORMAT_BC5_SNORM_BLOCK)) {
-        uint64_t n = (uint64_t)wb * hb;
-        // Allocate temporary ASTC output buffer (16 bytes per block)
-        uint8_t *astc_out = malloc(n * 16);
-        if (!astc_out) {
-            LOG("[vk] ASTC output allocation failed (%llu MB), falling back to RGBA8\n", (unsigned long long)(n * 16 >> 20));
-        } else {
-            bool is_snorm = (bc == VK_FORMAT_BC4_SNORM_BLOCK || bc == VK_FORMAT_BC5_SNORM_BLOCK);
-            int ret = -1;
-            if (bc == VK_FORMAT_BC3_UNORM_BLOCK || bc == VK_FORMAT_BC3_SRGB_BLOCK) {
-                ret = bc3_astc_decode_parallel(blocks, astc_out, (uint64_t)wb * hb, 3);
-            } else if (bc == VK_FORMAT_BC4_UNORM_BLOCK || bc == VK_FORMAT_BC4_SNORM_BLOCK) {
-                ret = bc4_astc_decode_parallel(blocks, astc_out, (uint64_t)wb * hb, is_snorm, 3);
-            } else if (bc == VK_FORMAT_BC5_UNORM_BLOCK || bc == VK_FORMAT_BC5_SNORM_BLOCK) {
-                ret = bc5_astc_decode_parallel(blocks, astc_out, (uint64_t)wb * hb, is_snorm, 3);
-            }
-            if (ret == 0) {
-                // Successfully decoded to ASTC: copy to output (which expects RGBA8, but we have ASTC).
-                // The caller expects RGBA8 in 'out', but we have ASTC.
-                // For now, decode ASTC back to RGBA8 for compatibility.
-                // TODO: Change callers to accept ASTC directly.
-                for (uint32_t y = 0; y < hb; y++) {
-                    for (uint32_t x = 0; x < wb; x++) {
-                        const uint8_t *a = astc_out + ((uint64_t)y * wb + x) * 16;
-                        uint8_t *o = out + ((uint64_t)y * wb + x) * 4 * bpp;
-                        astc_decode_block(a, 4, 4, bpp == 4, (uint8_t *)o);
-                    }
-                }
-                free(astc_out);
-                return;
-            }
-            free(astc_out);
-        }
-    }
     // If hardware ASTC HDR decoding is available and enabled, log availability
     if (g_vk.texture_compression_astc_hdr && g_settings.astc_hw_accel) {
-    static int logged = 0;
-    if (!logged) {
-        LOG("[vk] Hardware ASTC HDR decoding available (astc_hw_accel)\n");
-        logged = 1;
+        static int logged = 0;
+        if (!logged) {
+            LOG("[vk] Hardware ASTC HDR decoding available (astc_hw_accel)\n");
+            logged = 1;
+        }
     }
-}
     int pitch = (int)(wb * 4 * bpp);
     for (uint32_t y = 0; y < hb; y++)
         for (uint32_t x = 0; x < wb; x++) {

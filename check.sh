@@ -52,7 +52,9 @@ fi
 CHECK_FILES=()
 for f in "${FILES[@]}"; do
   case "$f" in
-    *.c|*.cpp) CHECK_FILES+=("$f") ;;
+    *.c|*.cpp) 
+      # Skip deleted files
+      [ -f "$f" ] && CHECK_FILES+=("$f") ;;
   esac
 done
 
