@@ -34,6 +34,15 @@ bool vk_mali_detected(void);
 #endif
 #define VK_CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { if (r_ == VK_ERROR_DEVICE_LOST) vk_device_fault_report(); \
     FATAL("%s failed: %d (%s:%d)\n", #x, r_, __FILE__, __LINE__); } } while (0)
+// Memory strategies (the explicit policy the backend runs on, replacing the runtime heuristics):
+//   VKM_STRATEGY_CPU_COMPAT - CPU Compatibility: no host import, no exported file (fd / dma-buf) - global memory through CPU
+//                    copies; Mali's mode to start from until the driver + capabilities validate a real import.
+//   VKM_STRATEGY_HOST_IMPORT - the guest heap imported at HEAP_BASE as GPU memory (VK_EXT_external_memory_host).
+//   VKM_STRATEGY_PLACED      - the guest heap mapped as GPU memory (VK_EXT_map_memory_placed).
+//   VKM_STRATEGY_FILE        - the guest heap through an exported file / dma-buf (VK_KHR_external_memory_fd / VK_EXT_external_memory_dma_buf).
+//   VKM_STRATEGY_AUTO        - start from VKM_STRATEGY_CPU_COMPAT (the Mali's starting mode) and move to a real strategy once the
+//                    capabilities and the driver validate it; stay on CPU Compatibility otherwise.
+enum { VKM_STRATEGY_CPU_COMPAT = 0, VKM_STRATEGY_HOST_IMPORT = 1, VKM_STRATEGY_PLACED = 2, VKM_STRATEGY_FILE = 3, VKM_STRATEGY_AUTO = 4 };
 // The most swapchain images the renderer keeps (one view and one present semaphore each): it asks for few, but drivers
 // may make more - a Mali-G57's made 12 (issue #1)
 #define VK_MAX_SWAP_IMAGES 16
@@ -50,6 +59,11 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import, shader_int64;
+    // Explicit memory strategy (the policy this backend runs on; device.c / exec.c): CPU Compatibility (a Mali's
+    // fallback mode: no host import, no exported file - fd / dma-buf - and no implicit setenv, global memory through
+    // CPU copies), a real import / placed / file, or AUTO to start from CPU Compatibility and move once the driver
+    // and the capabilities validate it.
+    int mem_strategy;
     bool dyn_render;              // VK_KHR_dynamic_rendering in use; without it, classic render passes (rpcompat.c)
     bool sync2;                   // synchronization2 in use; without it, Vulkan 1.0 barriers (device.c sync1_*)
     bool eds;                     // extended dynamic state in use; without it, those states (and extended dynamic state
@@ -177,7 +191,7 @@ VkSampler vk_sampler_plain(NvnSamplerDesc *d);  // (the same without depth compa
 VkSampler vk_default_sampler(bool linear);
 void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect);
 // Destruction once every submission that may use the object has completed.
-void vk_defer_image(VkImage img, VmaAllocation mem);
+void vk_defer_image(VkImage img, VmaAllocation mem, uint64_t mem_size);
 void vk_defer_view(VkImageView v);
 void vk_views_forget(TexBackend *b);  // drop (deferred) the cached views of an image being replaced
 uint64_t vk_frame_counter(void);
@@ -186,7 +200,10 @@ void vram_budget_evict_if_needed(void);
 // Pipeline cache (device.c): persistent shader cache in <data root>/pipeline_cache.bin
 void vk_pipeline_cache_save(void);                      // immediate save (called on pause)
 void vk_pipeline_cache_start_periodic_save(void);       // start 5-min periodic save thread
-void vk_pipeline_cache_stop_periodic_save(void);        // stop periodic save thread
+void vk_pipeline_cache_stop_periodic_save(void);        // stop periodic save thread (joins thread)
+void vk_pipeline_cache_request_save(void);              // non-blocking save request (safe if device not ready)
+void vk_pipeline_cache_clear(void);                     // atomic clear (not cancelled by in-memory save)
+bool vk_pipeline_cache_is_compatible(void);             // check if cache file exists and is compatible
 
 // ---- shaders / pipelines (shaders.c)
 VkShaderModule vk_compile_glsl(const char *src, int stage, const char *name);  // NULL on failure (logged)
@@ -199,3 +216,36 @@ void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);
 double vk_frame_work_ms(void);
 // Low RAM mode (vulkan/exec.c): -1 automatic (devices up to 4 GB), 1 on, 0 off; read once as the app starts
 bool vk_low_ram(void);
+
+// Benchmark accessors (exec.c)
+uint64_t vk_upload_bytes(void);
+uint64_t vk_feedback_copies(void);
+uint64_t vk_feedback_reads(void);
+uint64_t vk_inplace_breaks(void);
+uint64_t vk_pipe_binds(void);
+uint64_t vk_set_binds(void);
+uint64_t vk_cb_bytes(int which);
+uint64_t vk_cb_copied(void);
+uint64_t vk_cbwin(void);
+uint64_t vk_submissions(void);
+uint64_t vk_image_copies(void);
+uint64_t vk_buffer_copies(void);
+int vk_pss_mb(void);
+
+// Benchmark accessors (device.c)
+const char *vk_driver_version(void);
+int vk_api_version(void);
+int vk_mali_driver_major(void);
+int vk_mali_driver_minor(void);
+int vk_mem_strategy(void);
+
+bool vk_fragment_shading_rate(void);
+bool vk_astc_hdr(void);
+bool vk_maintenance5(void);
+bool vk_sync2(void);
+bool vk_dynamic_rendering(void);
+bool vk_external_memory_host(void);
+bool vk_map_memory_placed(void);
+bool vk_external_memory_fd(void);
+bool vk_external_memory_dmabuf(void);
+bool vk_feedback_loop_layout(void);

@@ -57,7 +57,15 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
     private static final String TAG = "BOTWRecompAndroid";
 
     private final Handler stats = new Handler(Looper.getMainLooper());
-    private final Runnable report = new Runnable() {
+    // Thermal status polled every second; getThermalHeadroom(10s) polled at 10s minimum interval.
+// Samples published atomically to avoid torn reads (thermal+headroom pair).
+private final Object thermalLock = new Object();
+private int lastThermal = -1;
+private float lastHeadroom = -1;
+private long lastHeadroomQueryNs = 0;
+private static final long HEADROOM_MIN_INTERVAL_NS = 10_000_000_000L;  // 10s
+
+private final Runnable report = new Runnable() {
         @Override
         public void run() {
             reportDeviceStats();
@@ -220,7 +228,21 @@ public class BOTWRecompAndroidActivity extends SDLActivity {
             }
             PowerManager pm = getSystemService(PowerManager.class);
             int thermal = pm != null ? pm.getCurrentThermalStatus() : -1;
-            float headroom = pm != null ? pm.getThermalHeadroom(10) : -1;
+            
+            // Decouple getThermalHeadroom: only query at 10s minimum interval
+            float headroom = -1;
+            long nowNs = System.nanoTime();
+            synchronized (thermalLock) {
+                lastThermal = thermal;
+                if (nowNs - lastHeadroomQueryNs >= HEADROOM_MIN_INTERVAL_NS) {
+                    float hr = pm != null ? pm.getThermalHeadroom(10) : -1;
+                    if (!Float.isNaN(hr)) {
+                        lastHeadroom = hr;
+                        lastHeadroomQueryNs = nowNs;
+                    }
+                }
+                headroom = lastHeadroom;
+            }
             nativeDeviceStats(temp, pct, watts, thermal, Float.isNaN(headroom) ? -1 : headroom, plugged);
         } catch (Throwable t) {  // (also before libmain is loaded: UnsatisfiedLinkError)
             Log.w(TAG, "device stats: " + t);

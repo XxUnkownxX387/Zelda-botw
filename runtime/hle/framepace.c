@@ -102,12 +102,11 @@ bool framepace_in_event(void) { return g_game_version >= 182 && in_event(); }  /
 // ---- thermal cap (Video > "30 fps when the phone overheats", g_settings.thermal_cap; after totk-android's
 // thermal_step, MIT): at 60 fps a phone heats until Android lowers its clocks, and the frame rate then jumps between 60
 // and ~40; held at 30 it runs steady, cooler and on less power. Android's own reading, once a second (platform/android.c
-// from BOTWRecompAndroidActivity.reportDeviceStats): thermal status SEVERE (3) or worse, or the headroom forecast 10 s
-// ahead at 1.0 or more (throttling ahead) -> 30 fps; back after 30 readings in a row below both (status under SEVERE,
-// headroom under 0.9), a gap of over 2 s between readings starting the count again. Only 60 and 40 / 45 fps modes:
-// the others are 30 or less already, or the game's own choice. LARECOMP_THERMAL_CAP=1 / 0 over the setting.
-// thermal_perf (Video > Mode performance thermique): 0 Auto (cap), 1 Performance (no app-level drop),
-// 2 Balanced (status only, not headroom forecast).
+// from BOTWRecompAndroidActivity.reportDeviceStats): thermal status SEVERE (3) or worse -> 30 fps; back after 30
+// readings in a row below SEVERE and headroom < 0.9, a gap of over 2 s between readings starting the count again.
+// Unified cadence: single thermal sample drives both cap and dynamic resolution with hysteresis.
+// thermal_perf (Video > Mode performance thermique): 0 Auto (status + headroom), 1 Performance (no app-level drop),
+// 2 Balanced (status only, not headroom forecast). SEVERE status ALWAYS triggers cap regardless of mode.
 static volatile int g_thermal_hot;  // (1: capped now)
 static int thermal_cap_on(void) {
     static int env = -2;
@@ -116,12 +115,11 @@ static int thermal_cap_on(void) {
 }
 void framepace_thermal_sample(int thermal, float headroom) {
     static uint64_t last_ns;
-    static int cool;  // readings in a row below both lines
+    static int cool;  // readings in a row below both lines (status < SEVERE, headroom < 0.9)
     uint64_t now = plat_now_ns();
     bool gap = last_ns && now - last_ns > 2000000000ull;
     last_ns = now;
-    {   // LARECOMP_THERMAL_TEST=<from>,<to> (a test): the readings between those seconds of the run say SEVERE - the POCO
-        // F7 Ultra held 60 fps at 97 C for 12 minutes with HyperOS's status at 0 throughout
+    {   // LARECOMP_THERMAL_TEST=<from>,<to> (a test): the readings between those seconds of the run say SEVERE
         static double from = -2, to;
         static uint64_t t0;
         if (from == -2) {
@@ -135,14 +133,19 @@ void framepace_thermal_sample(int thermal, float headroom) {
     }
     // thermal_perf: 0=Auto (status + headroom), 1=Performance (no cap), 2=Balanced (status only)
     int perf_mode = g_settings.thermal_perf;
+    
+    // SEVERE (>=3) ALWAYS triggers hot, regardless of perf_mode (safety)
+    bool severe = thermal >= 3;
     bool hot = false;
     if (perf_mode == 1) {
-        hot = false;  // Performance: never cap at app level
+        hot = false;  // Performance: never cap at app level (unless SEVERE)
     } else if (perf_mode == 2) {
-        hot = thermal >= 3;  // Balanced: only status SEVERE+, ignore headroom
+        hot = severe;  // Balanced: only status SEVERE+, ignore headroom
     } else {
-        hot = thermal >= 3 || headroom >= 1.0f;  // Auto: status + headroom forecast
+        hot = severe || (headroom >= 0.85f);  // Auto: status SEVERE + headroom forecast (hysteresis: 0.85 trigger)
     }
+    hot = hot || severe;  // SEVERE always wins
+    
     bool cold;
     if (perf_mode == 1) {
         cold = true;  // Performance: always cool immediately

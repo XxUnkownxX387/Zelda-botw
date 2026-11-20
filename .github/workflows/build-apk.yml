@@ -14,6 +14,9 @@ jobs:
     name: Build arm64-v8a APK
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      NDK_VERSION: 30.0.16248370
+      ABI: arm64-v8a
 
     steps:
       - name: Checkout Repository
@@ -33,8 +36,9 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('android/botwrecompandroid/**/*.gradle*', 'android/botwrecompandroid/**/gradle-wrapper.properties') }}
-          restore-keys: gradle-
+          key: gradle-${{ hashFiles('android/botwrecompandroid/**/*.gradle*', 'android/botwrecompandroid/**/gradle-wrapper.properties') }}-${{ env.ABI }}-ndk-${{ env.NDK_VERSION }}
+          restore-keys: |
+            gradle-
 
       - name: Install Android SDK components
         run: |
@@ -48,7 +52,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: android/deps/out
-          key: deps-${{ hashFiles('android/deps/*.sh', 'android/deps/*.patch') }}
+          key: deps-${{ env.ABI }}-ndk-${{ env.NDK_VERSION }}-${{ hashFiles('android/deps/*.sh', 'android/deps/*.patch') }}
 
       - name: Build dependencies
         run: |
@@ -63,12 +67,19 @@ jobs:
         if: success()
         with:
           path: android/deps/out
-          key: deps-${{ hashFiles('android/deps/*.sh', 'android/deps/*.patch') }}
+          key: deps-${{ env.ABI }}-ndk-${{ env.NDK_VERSION }}-${{ hashFiles('android/deps/*.sh', 'android/deps/*.patch') }}
 
-      - name: Clone libadrenotools
+      - name: Checkout libadrenotools at the pinned gitlink
         run: |
-          rm -rf third_party/libadrenotools
-          git clone --recursive https://github.com/bylaws/libadrenotools third_party/libadrenotools
+          if git ls-files --stage -- 'third_party/libadrenotools' | grep -q '^160000'; then
+            git submodule update --init --recursive third_party/libadrenotools
+          elif [ -n "${LARECOMP_ADRENOTOOLS_SHA:-}" ]; then
+            git clone --recursive https://github.com/bylaws/libadrenotools third_party/libadrenotools
+            git -C third_party/libadrenotools checkout --depth 1 "$LARECOMP_ADRENOTOOLS_SHA"
+          else
+            echo "::error::third_party/libadrenotools has no pinned gitlink in this revision (no mode 160000 entry); refusing a floating HEAD clone. Pin the submodule or set LARECOMP_ADRENOTOOLS_SHA."
+            exit 1
+          fi
 
       - name: Build APK
         run: |

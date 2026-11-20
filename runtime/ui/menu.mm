@@ -705,18 +705,30 @@ static void tab_display(void) {
                     g_settings.vrs_mali = true;
                     g_settings.max_gpu_mem_mb = -1;  // Auto
                     g_settings.shader_parallel = true;
+                    g_settings.fps_mode = 2;  // 60 fps
+                    g_settings.res_mode = 1;  // 1x
+                    g_settings.async_shader_compile = true;
+                    g_settings.astc_ldr_hw_accel = true;
                     break;
                 }
                 case 2: {  // Balanced
                     g_settings.vrs_mali = true;
                     g_settings.max_gpu_mem_mb = -1;  // Auto
                     g_settings.shader_parallel = true;
+                    g_settings.fps_mode = 2;  // 60 fps
+                    g_settings.res_mode = 1;  // 1x
+                    g_settings.async_shader_compile = true;
+                    g_settings.astc_ldr_hw_accel = true;
                     break;
                 }
                 case 3: {  // Quality
                     g_settings.vrs_mali = false;  // Full rate for best quality
                     g_settings.max_gpu_mem_mb = -1;  // Auto
                     g_settings.shader_parallel = true;
+                    g_settings.fps_mode = 2;  // 60 fps
+                    g_settings.res_mode = 2;  // 2x
+                    g_settings.async_shader_compile = true;
+                    g_settings.astc_ldr_hw_accel = true;
                     break;
                 }
                 default: break;  // Custom: keep current settings
@@ -724,51 +736,90 @@ static void tab_display(void) {
             g_settings.mali_preset = preset;
             settings_save();
         };
+        // Track preset-controlled settings to auto-switch to Custom on user change
+        static int last_preset_controlled_vrs = -1, last_preset_controlled_async = -1, last_preset_controlled_astc = -1;
+        if (g_settings.mali_preset != 0) {
+            if (last_preset_controlled_vrs >= 0 && g_settings.vrs_mali != last_preset_controlled_vrs) {
+                g_settings.mali_preset = 0;
+            }
+            if (last_preset_controlled_async >= 0 && g_settings.async_shader_compile != last_preset_controlled_async) {
+                g_settings.mali_preset = 0;
+            }
+            if (last_preset_controlled_astc >= 0 && g_settings.astc_ldr_hw_accel != last_preset_controlled_astc) {
+                g_settings.mali_preset = 0;
+            }
+            last_preset_controlled_vrs = g_settings.vrs_mali;
+            last_preset_controlled_async = g_settings.async_shader_compile;
+            last_preset_controlled_astc = g_settings.astc_ldr_hw_accel;
+        } else {
+            // In Custom mode, update tracked values without switching
+            last_preset_controlled_vrs = g_settings.vrs_mali;
+            last_preset_controlled_async = g_settings.async_shader_compile;
+            last_preset_controlled_astc = g_settings.astc_ldr_hw_accel;
+        }
         if (opt_choice(tr("Mali GPU Preset"), &g_settings.mali_preset, mali_preset_names, 4, 0,
                        tr("Quick configuration for Mali-G720 / Immortalis Gen4. "
-                          "Performance: VRS on, shader parallel on, VRAM Auto. "
-                          "Balanced: VRS on, shader parallel on, VRAM Auto. "
-                          "Quality: VRS off, shader parallel on, VRAM Auto. "
+                          "Performance: VRS on, shader parallel on, 60fps, VRAM Auto, Async on, ASTC LDR on. "
+                          "Balanced: VRS on, shader parallel on, 60fps, VRAM Auto, Async on, ASTC LDR on. "
+                          "Quality: VRS off, shader parallel on, 60fps, 2x res, VRAM Auto, Async on, ASTC LDR on. "
                           "Custom: keep your current individual settings. "
-                          "Each setting can still be changed below after selecting a preset."))) {
+                          "Changing any preset-controlled setting switches to Custom."))) {
             apply_mali_preset(g_settings.mali_preset);
         }
         opt_toggle(tr("Variable Rate Shading"), &g_settings.vrs_mali, true,
                    tr("Mali-G720 / Immortalis Gen4: applies a reduced fragment shading rate (2x2) "
                       "on the intermediate SMAA passes (edges, weights). Requires VK_KHR_fragment_shading_rate "
-                      "support in the driver. Off: full-rate post passes. Applies at once."));
-        opt_toggle(tr("Advanced AFBC Compression"), &g_settings.afbc_advanced, true,
-                   tr("Advanced AFBC (Arm Frame Buffer Compression) on Mali: keeps render targets compressed through their "
-                      "format list, reducing bandwidth. Off: each pass's loads and stores move the images whole (no "
-                      "compression). Applies at once; restart the app for all textures."));
+                      "support in the driver (driver query at startup). "
+                      "Off: full-rate post passes. Scope: immediate."));
+        // AFBC (Arm Frame Buffer Compression) is driver-managed; no app-level "advanced" toggle.
         const char *thermal_modes[] = {tr("Auto (thermal cap)"), tr("Performance (holds the rate)"),
                                       tr("Balanced (status only)")};
         opt_choice(tr("Thermal Performance Mode"), &g_settings.thermal_perf, thermal_modes, 3, 0,
-                   tr("Thermal performance mode for the Dimensity chipset. Auto: the thermal cap drops to 30 fps when hot "
-                      "(Android status SEVERE or headroom forecast). Performance: holds the chosen frame rate while hot, "
-                      "no app-level drop. Balanced: only the Android thermal status triggers a drop, not the headroom "
-                      "forecast. Applies at once."));
+                   tr("Thermal performance mode for the Dimensity chipset. "
+                      "Auto (0): thermal cap drops to 30 fps when hot (Android status SEVERE or headroom forecast). "
+                      "Performance (1): holds the chosen frame rate while hot, no app-level drop. "
+                      "Balanced (2): only Android thermal status triggers a drop, not headroom forecast. "
+                      "Scope: immediate."));
         opt_toggle(tr("Asynchronous Shader Compilation"), &g_settings.async_shader_compile, true,
                    tr("Asynchronous shader compilation: compiles shaders on background threads while the game runs, "
                       "reducing stutter on first use of new materials. Uses dedicated worker threads. "
-                      "On by default for Mali-G720. Applies at once."));
-        opt_toggle(tr("ASTC Hardware Acceleration"), &g_settings.astc_hw_accel, true,
-                   tr("ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback. "
-                      "On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths, "
-                      "significantly reducing texture upload times and memory bandwidth. "
-                      "On by default for Mali-G720. Applies at next game start; restart the app for all textures."));
+                      "Persisted in settings. On by default for Mali-G720. Scope: immediate."));
+        opt_toggle(tr("ASTC LDR Hardware Acceleration"), &g_settings.astc_ldr_hw_accel, true,
+                   tr("ASTC LDR hardware decompression: uses GPU-native ASTC decompression instead of CPU fallback. "
+                      "Supported on most modern GPUs. Persisted. Scope: next game start (restart app for all textures)."));
+        opt_toggle(tr("ASTC HDR Hardware Acceleration"), &g_settings.astc_hdr_hw_accel, true,
+                   tr("ASTC HDR hardware decompression: requires VK_EXT_texture_compression_astc_hdr + Mali-G720+. "
+                      "Enables native HDR ASTC paths. Persisted. Scope: next game start."));
     }
     // Android Dynamic Performance Framework (ADPF) - available on API 33+
+    // Mapping: Auto=-1, Off=0, On=1 (stable on disk, safe re-read)
     const char *adpf_modes[] = {tr("Auto (on for API 33+)"), tr("Off"), tr("On")};
-    opt_choice(tr("ADPF"), &g_settings.adpf_mode, adpf_modes, 3, -1,
-               tr("Android Dynamic Performance Framework (API 33+): hints the OS about frame workload for "
-                  "thermal and power management. Auto: enabled on API 33+, off on older versions. Off: disabled. "
-                  "On: always enabled if API 33+. Requires a JNI callback each frame; applies at next game start."));
+    // Show effective state: API level + driver support
+    extern int g_android_api_level;  // from platform/android.c
+    bool adpf_available = g_android_api_level >= 33;
+    char adpf_eff[128];
+    if (g_settings.adpf_mode == -1) {
+        snprintf(adpf_eff, sizeof adpf_eff, adpf_available ? "Effective: ON (Auto on API 33+)" : "Effective: OFF (Auto off on older API)");
+    } else {
+        snprintf(adpf_eff, sizeof adpf_eff, g_settings.adpf_mode ? "Effective: ON (forced)" : "Effective: OFF (forced)");
+    }
+    char adpf_tooltip[512];
+    snprintf(adpf_tooltip, sizeof adpf_tooltip,
+        "Android Dynamic Performance Framework (API 33+): hints the OS about frame workload for "
+        "thermal and power management. "
+        "Auto (-1): enabled on API 33+, off on older versions. "
+        "Off (0): disabled. "
+        "On (1): always enabled if API 33+. "
+        "Stable disk values: -1/0/1. "
+        "Requires a JNI callback each frame. "
+        "Scope: next game start. "
+        "%s", adpf_eff);
+    opt_choice(tr("ADPF"), &g_settings.adpf_mode, adpf_modes, 3, -1, adpf_tooltip);
     // Sustained Performance Mode (API 24+)
     if (opt_toggle(tr("Sustained Performance Mode"), &g_settings.sustained_perf, false,
                    tr("Window.setSustainedPerformanceMode (API 24+): requests predictable sustained performance from "
-                      "the OS while the window is focused. The OS may grant it, lowering max clocks for stability. "
-                      "Off by default. Applies at once when toggled."))) {
+                      "the OS while the window is focused. The OS may grant it (lowering max clocks for stability). "
+                      "Persisted. Off by default. Scope: immediate when toggled."))) {
 #ifdef __ANDROID__
             plat_sustained_perf_mode(g_settings.sustained_perf);
 #endif
@@ -781,11 +832,9 @@ static void tab_display(void) {
                       "Applies at next game start."))) {
         settings_save();
     }
-    if (opt_button(tr("Clear Shader Cache"), tr("Deletes <data root>/pipeline_cache.bin. The cache will be rebuilt on the next game start."))) {
-        char path[1024];
-        snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
-        remove(path);
-        LOG("[vk-cache] shader cache cleared by user\n");
+    if (opt_button(tr("Clear Shader Cache"), tr("Deletes <data root>/pipeline_cache.bin. The cache will be rebuilt on the next game start. Not cancelled by in-memory save."))) {
+        extern void vk_pipeline_cache_clear(void);
+        vk_pipeline_cache_clear();
     }
 #endif
     opt_end();

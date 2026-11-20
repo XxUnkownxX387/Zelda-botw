@@ -736,10 +736,15 @@ void plat_terminate(void) { _exit(0); }
 #include <jni.h>
 #include <stdatomic.h>
 
-// What the activity reports once a second (BOTWRecompAndroidActivity.reportDeviceStats: public Android APIs; apps can't read
-// the battery or most thermal sensors in /sys).
+// What the activity reports: thermal status every second, getThermalHeadroom(10s) at 10s minimum interval.
+// Samples published atomically (thermal+headroom pair) to avoid torn reads.
+// NaN headroom from Java is converted to -1 (unknown). Preemption handled by atomic update.
 static pthread_mutex_t g_ds_lock = PTHREAD_MUTEX_INITIALIZER;
 static PlatDeviceStats g_ds = {.batt_temp_c = -1, .batt_pct = -1, .thermal = -1, .headroom = -1, .plugged = -1};
+static int g_android_pss_mb = -1;  // PSS from nativeMemoryPressure callback
+
+// Cached headroom for framepace when JNI calls are less frequent than headroom updates
+static float g_cached_headroom = -1;
 
 JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeDeviceStats(JNIEnv *env, jclass cls, jfloat batt_temp_c,
                                                                             jfloat batt_pct, jfloat watts, jint thermal,
@@ -752,6 +757,8 @@ JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nati
     g_ds.thermal = thermal;
     g_ds.headroom = headroom;
     g_ds.plugged = plugged;
+    // Cache headroom for framepace (atomic under lock)
+    g_cached_headroom = headroom;
     pthread_mutex_unlock(&g_ds_lock);
     extern void framepace_thermal_sample(int thermal, float headroom);  // (hle/framepace.c: 30 fps while too hot)
     framepace_thermal_sample(thermal, headroom);
@@ -775,16 +782,19 @@ JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nati
 JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeMemoryPressure(
         JNIEnv *env, jclass cls, jint level, jlong available, jlong total, jlong threshold, jboolean low, jint pss) {
     (void)env; (void)cls;
+    g_android_pss_mb = pss / 1024;
     LOG("[android] memory pressure level %d: available %llu MB / %llu MB, low threshold %llu MB, low %d, process PSS %d MB\n",
         level, (unsigned long long)available >> 20, (unsigned long long)total >> 20,
-        (unsigned long long)threshold >> 20, low != 0, pss / 1024);
+        (unsigned long long)threshold >> 20, low != 0, g_android_pss_mb);
 }
 
 JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeSavePipelineCache(
         JNIEnv *env, jclass cls) {
     (void)env; (void)cls;
-    extern void vk_pipeline_cache_save(void);
-    vk_pipeline_cache_save();
+    // Non-blocking request: safe even if device not yet created (early pause)
+    // The save will be performed by the periodic thread or on next opportunity
+    extern void vk_pipeline_cache_request_save(void);
+    vk_pipeline_cache_request_save();
 }
 
 static uint64_t read_u64(const char *path) {

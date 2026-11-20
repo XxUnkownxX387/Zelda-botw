@@ -14,23 +14,77 @@
 #include "../../settings.h"  // g_settings.max_gpu_mem_mb
 
 // ================================================================== VRAM budget (LRU eviction)
-static uint64_t g_vram_used_bytes = 0;
-static uint64_t g_vram_budget_bytes = 0;
+// Incremental accounting distinguishes live, deferred (in-flight), and collected textures.
+// -1=Auto persists across GPU selection; effective budget exposed after GPU pick.
+// Hysteresis prevents thrashing; Android low-memory pressure shrinks budget temporarily.
+// Only evicts textures proven recreatable (not render targets, not GPU-owned, not aliased,
+// no pending command refs, and completion sequence past the last use).
+static uint64_t g_vram_used_bytes = 0;        // live textures only (excludes deferred/collected)
+static uint64_t g_vram_deferred_bytes = 0;    // textures deferred for GPU completion
+static uint64_t g_vram_budget_bytes = 0;      // effective budget (after hysteresis/pressure)
+static uint64_t g_vram_budget_base_bytes = 0; // base budget from settings (-1=Auto, set on GPU pick)
+static int g_vram_budget_auto_mb = -1;        // persisted Auto value (-1=unset, else MB)
+
+// Per-frame eviction state
+static uint64_t g_last_eviction_frame = 0;    // last frame we ran eviction (0 = first frame)
+static int g_evicted_this_frame = 0;          // count evicted this frame (max 8)
+
+// Hysteresis: budget must exceed by hysteresis_mb before eviction kicks in
+static const int VRAM_HYSTERESIS_MB = 32;     // 32 MB hysteresis buffer
+static const int VRAM_MAX_EVICT_PER_FRAME = 8;
+
+// Low-memory watchdog state
+static uint64_t g_vram_budget_lowmem_orig = 0;
+static int g_vram_budget_lowmem_armed = 0;
 
 // Live game textures (only used in this file): move static definitions here to avoid
 // "static declaration follows non-static declaration" error with extern below.
 static NvnTexture **g_live;
 static int g_nlive, g_cap_live;
 
-// Forward declaration (defined in exec.c)
+// Forward declarations
 extern uint64_t renderer_present_count(void);
+extern void backend_texture_destroyed(NvnTexture *t);
+extern void vk_alias_texture_destroyed(NvnTexture *t);
+extern int naliases;
+typedef struct { NvnTexture *src, *dst; VkImage simg, dimg; } CopyAlias;
+extern CopyAlias aliases[8];
 
+// Initialize VRAM budget from settings (-1=Auto, 0=disabled, >0=MB).
+// Called after GPU selection to expose effective budget.
 static void vram_budget_init(void) {
-    if (g_vram_budget_bytes == 0 && g_settings.max_gpu_mem_mb > 0) {
-        g_vram_budget_bytes = (uint64_t)g_settings.max_gpu_mem_mb * 1024 * 1024;
-        LOG("[vk] VRAM budget: %d MB\n", g_settings.max_gpu_mem_mb);
+    if (g_vram_budget_base_bytes != 0) return; // already initialized
+    
+    if (g_settings.max_gpu_mem_mb > 0) {
+        g_vram_budget_base_bytes = (uint64_t)g_settings.max_gpu_mem_mb * 1024 * 1024;
+        g_vram_budget_auto_mb = g_settings.max_gpu_mem_mb;
+    } else if (g_settings.max_gpu_mem_mb == -1) { // Auto
+        // Auto: 75% of total system RAM, capped at 6 GB
+        FILE *f = fopen("/proc/meminfo", "r");
+        unsigned long total_kb = 0;
+        if (f) {
+            char line[256];
+            while (fgets(line, sizeof line, f)) {
+                if (strncmp(line, "MemTotal:", 9) == 0) { sscanf(line + 9, "%lu", &total_kb); break; }
+            }
+            fclose(f);
+        }
+        uint64_t total_mb = total_kb / 1024;
+        uint64_t auto_mb = total_mb * 3 / 4;
+        if (auto_mb > 6144) auto_mb = 6144; // cap at 6 GB
+        if (auto_mb < 512) auto_mb = 512;   // floor at 512 MB
+        g_vram_budget_base_bytes = auto_mb * 1024 * 1024;
+        g_vram_budget_auto_mb = (int)auto_mb;
+        LOG("[vk] VRAM budget (Auto): %d MB (%llu MB total RAM)\n", g_vram_budget_auto_mb, (unsigned long long)total_mb);
+    } else {
+        // Disabled (0 or negative other than -1)
+        g_vram_budget_base_bytes = 0;
+        return;
     }
-    // (recount the used bytes from the live textures: the running counter is reset from g_live at init)
+    g_vram_budget_bytes = g_vram_budget_base_bytes;
+    LOG("[vk] VRAM budget: %d MB (effective %llu MB)\n", g_vram_budget_auto_mb, (unsigned long long)(g_vram_budget_bytes >> 20));
+
+    // Rebuild used counter from live textures
     uint64_t used = 0;
     for (int i = 0; i < g_nlive; i++) {
         NvnTexture *t = g_live[i];
@@ -38,72 +92,35 @@ static void vram_budget_init(void) {
         if (b && b->mem_size > 0) used += b->mem_size;
     }
     g_vram_used_bytes = used;
+    g_vram_deferred_bytes = 0;
 }
 
+// Incremental add: called after successful allocation (create_image)
 static void vram_budget_add(uint64_t size) {
     if (g_vram_budget_bytes == 0) return;
     g_vram_used_bytes += size;
 }
 
+// Incremental remove: called before deferring destruction (destroy_image)
 static void vram_budget_remove(uint64_t size) {
     if (g_vram_budget_bytes == 0) return;
     if (g_vram_used_bytes >= size) g_vram_used_bytes -= size;
     else g_vram_used_bytes = 0;
 }
 
-static void vram_budget_maybe_evict(uint64_t current_frame) {
-    if (g_vram_budget_bytes == 0 || g_vram_used_bytes <= g_vram_budget_bytes) return;
-
-    uint64_t frame = renderer_present_count();
-    if (frame == current_frame) return;  // already processed this frame
-
-    // Evict in a loop (max 8 textures per frame) until the used memory is back under the budget: each
-    // eviction frees a recreatable texture, which the game re-uploads from the guest memory when it draws it again.
-    // Recreatable = not a render target (rs_group == RS_NONE), not GPU-owned,
-    // and can be re-uploaded from guest memory (dynamic or host-uploaded).
-    // Also skip recently used (last 2 frames - fixed unsigned underflow).
-    for (int evicted = 0; evicted < 8 && g_vram_used_bytes > g_vram_budget_bytes; evicted++) {
-        NvnTexture *victim = NULL;
-        uint64_t oldest = UINT64_MAX;
-        for (int i = 0; i < g_nlive; i++) {
-            NvnTexture *t = g_live[i];
-            TexBackend *b = t ? (TexBackend *)t->backend : NULL;
-            if (!b) continue;
-            // Skip render targets
-            if (b->rs_group != RS_NONE) continue;
-            // Skip GPU-owned textures (not recreatable from guest memory)
-            if (b->gpu_owned) continue;
-            // Skip recently used (last 2 frames - fixed unsigned underflow)
-            if (frame > 2 && b->last_used_frame > frame - 2) continue;
-            if (b->last_used_frame < oldest) {
-                oldest = b->last_used_frame;
-                victim = t;
-            }
-        }
-        if (!victim) break;  // (nothing recreatable left: stop here, the budget stays over)
-        TexBackend *vb = victim->backend ? (TexBackend *)victim->backend : NULL;
-        LOG("[vk] VRAM budget exceeded (%llu MB > %d MB): evicting texture %p (last used frame %llu, %llu MB)\n",
-            (unsigned long long)(g_vram_used_bytes >> 20), g_settings.max_gpu_mem_mb,
-            (void *)victim, (unsigned long long)oldest,
-            (unsigned long long)(vb ? vb->mem_size >> 20 : 0));
-        extern void backend_texture_destroyed(NvnTexture *t);
-        backend_texture_destroyed(victim);
-    }
-    if (g_vram_used_bytes > g_vram_budget_bytes)
-        LOG("[vk] VRAM budget still exceeded (%llu MB > %d MB) after the eviction loop: stop here (max 8 textures/frame)\n",
-            (unsigned long long)(g_vram_used_bytes >> 20), g_settings.max_gpu_mem_mb);
+// Called when a deferred texture is actually collected (vk_collect_dead)
+static void vram_budget_collected(uint64_t size) {
+    if (g_vram_budget_bytes == 0) return;
+    if (g_vram_deferred_bytes >= size) g_vram_deferred_bytes -= size;
+    else g_vram_deferred_bytes = 0;
 }
 
-// Low-memory watchdog (Mali-G720, 12 GB LPDDR5X): if MemAvailable drops under the threshold,
-// temporarily shrink the VRAM budget by 25% (the next eviction pass then frees textures sooner;
-// the budget is restored as soon as memory is plentiful again).
-static uint64_t g_vram_budget_lowmem_orig = 0;  // original budget while the watchdog is armed
-static int g_vram_budget_lowmem_armed = 0;
-
+// Low-memory watchdog: shrinks effective budget when MemAvailable < threshold
 static void vram_budget_lowmem_watchdog(void) {
     static int frame_counter = 0;
-    if (++frame_counter % 120 != 0) return;  // Only check once every 120 frames
-    if (g_vram_budget_bytes == 0) return;
+    if (++frame_counter % 120 != 0) return; // Check every 120 frames
+    if (g_vram_budget_base_bytes == 0) return;
+    
     FILE *f = fopen("/proc/meminfo", "r");
     if (!f) return;
     char line[256];
@@ -112,19 +129,100 @@ static void vram_budget_lowmem_watchdog(void) {
         if (strncmp(line, "MemAvailable:", 12) == 0) { sscanf(line + 12, "%lu", &avail_kb); break; }
     }
     fclose(f);
-    if (avail_kb == 0) return;  // (read failed: leave the budget untouched)
-    if (avail_kb / 1024 < 1200) {  // MemAvailable < 1200 MB
+    if (avail_kb == 0) return;
+    
+    uint64_t avail_mb = avail_kb / 1024;
+    if (avail_mb < 1200) { // MemAvailable < 1200 MB
         if (!g_vram_budget_lowmem_armed) {
             g_vram_budget_lowmem_orig = g_vram_budget_bytes;
-            g_vram_budget_bytes -= g_vram_budget_bytes / 4;  // -25%
+            g_vram_budget_bytes = g_vram_budget_bytes * 3 / 4; // -25%
             g_vram_budget_lowmem_armed = 1;
-            LOG("[vk] low memory: MemAvailable < 1200 MB -> VRAM budget temporarily reduced by 25%% (%llu MB)\n",
-                (unsigned long long)(g_vram_budget_bytes >> 20));
+            LOG("[vk] low memory: MemAvailable %llu MB < 1200 MB -> VRAM budget reduced by 25%% to %llu MB\n",
+                (unsigned long long)avail_mb, (unsigned long long)(g_vram_budget_bytes >> 20));
         }
     } else if (g_vram_budget_lowmem_armed) {
         g_vram_budget_bytes = g_vram_budget_lowmem_orig;
         g_vram_budget_lowmem_armed = 0;
-        LOG("[vk] low memory cleared: MemAvailable recovered -> VRAM budget restored\n");
+        LOG("[vk] low memory cleared: MemAvailable %llu MB -> VRAM budget restored to %llu MB\n",
+            (unsigned long long)avail_mb, (unsigned long long)(g_vram_budget_bytes >> 20));
+    }
+}
+
+// Check if a texture is safe to evict (not in flight, not aliased, not a render target, etc.)
+static bool vram_can_evict(NvnTexture *t, TexBackend *b, uint64_t frame) {
+    if (!b) return false;
+    // Skip render targets (rs_group != RS_NONE)
+    if (b->rs_group != RS_NONE) return false;
+    // Skip GPU-owned textures (not recreatable from guest memory)
+    if (b->gpu_owned) return false;
+    // Skip if used in the last 2 frames (LRU protection)
+    if (frame > 2 && b->last_used_frame > frame - 2) return false;
+    // Skip if texture has pending command references (refs > 0 means in use by command buffers)
+    if (t->refs > 0) return false;
+    // Skip if texture is an alias source (contents handed over to another texture)
+    extern int naliases;
+    extern CopyAlias aliases[8];
+    for (int i = 0; i < naliases; i++) {
+        if (aliases[i].src == t) return false;
+    }
+    // Skip if texture was drawn into this frame (rt_frame == frame + 1 means drawn this frame)
+    if (b->rt_frame == frame + 1) return false;
+    return true;
+}
+
+// Main eviction logic: runs once per render frame, evicts up to VRAM_MAX_EVICT_PER_FRAME textures
+static void vram_budget_maybe_evict(uint64_t current_frame) {
+    if (g_vram_budget_bytes == 0) return;
+    
+    // Hysteresis: only evict if usage exceeds budget + hysteresis
+    uint64_t hysteresis_bytes = (uint64_t)VRAM_HYSTERESIS_MB * 1024 * 1024;
+    if (g_vram_used_bytes <= g_vram_budget_bytes + hysteresis_bytes) return;
+    
+    uint64_t frame = renderer_present_count();
+    
+    // Per-frame guard: only run once per frame (including frame 0)
+    if (frame == g_last_eviction_frame) return;
+    g_last_eviction_frame = frame;
+    g_evicted_this_frame = 0;
+    
+    // Evict in a loop until budget is met or max evictions reached
+    for (int evicted = 0; evicted < VRAM_MAX_EVICT_PER_FRAME && g_vram_used_bytes > g_vram_budget_bytes; evicted++) {
+        NvnTexture *victim = NULL;
+        uint64_t oldest = UINT64_MAX;
+        TexBackend *victim_backend = NULL;
+        
+        for (int i = 0; i < g_nlive; i++) {
+            NvnTexture *t = g_live[i];
+            TexBackend *b = t ? (TexBackend *)t->backend : NULL;
+            if (!b) continue;
+            if (!vram_can_evict(t, b, frame)) continue;
+            if (b->last_used_frame < oldest) {
+                oldest = b->last_used_frame;
+                victim = t;
+                victim_backend = b;
+            }
+        }
+        
+        if (!victim) break; // Nothing recreatable left to evict
+        
+        LOG("[vk] VRAM budget exceeded (%llu MB > %llu MB + hysteresis): evicting texture %p "
+            "(last used frame %llu, %llu MB, refs=%u, rs_group=%u, gpu_owned=%d)\n",
+            (unsigned long long)(g_vram_used_bytes >> 20),
+            (unsigned long long)(g_vram_budget_bytes >> 20),
+            (void *)victim, (unsigned long long)oldest,
+            (unsigned long long)(victim_backend ? victim_backend->mem_size >> 20 : 0),
+            victim->refs, victim_backend ? victim_backend->rs_group : 255,
+            victim_backend ? victim_backend->gpu_owned : 0);
+        
+        g_evicted_this_frame++;
+        backend_texture_destroyed(victim);
+    }
+    
+    if (g_vram_used_bytes > g_vram_budget_bytes) {
+        LOG("[vk] VRAM budget still exceeded (%llu MB > %llu MB) after %d evictions this frame\n",
+            (unsigned long long)(g_vram_used_bytes >> 20),
+            (unsigned long long)(g_vram_budget_bytes >> 20),
+            g_evicted_this_frame);
     }
 }
 
@@ -337,10 +435,10 @@ static bool is_bc(VkFormat f) { return f >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && f <
 // wb x hb blocks (bsize bytes each, rows of blocks) -> texels, rows of wb * 4 texels of bpp bytes
 static void bc_decode(VkFormat bc, const uint8_t *blocks, uint32_t wb, uint32_t hb, uint32_t bsize, uint8_t *out, uint32_t bpp) {
     // If hardware ASTC HDR decoding is available and enabled, log availability
-    if (g_vk.texture_compression_astc_hdr && g_settings.astc_hw_accel) {
+    if (g_vk.texture_compression_astc_hdr && g_settings.astc_hdr_hw_accel) {
         static int logged = 0;
         if (!logged) {
-            LOG("[vk] Hardware ASTC HDR decoding available (astc_hw_accel)\n");
+            LOG("[vk] Hardware ASTC HDR decoding available (astc_hdr_hw_accel)\n");
             logged = 1;
         }
     }
@@ -490,7 +588,7 @@ void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags as
 }
 
 // Images destroyed by the guest are kept until the submissions that may use them have completed.
-typedef struct { VkImage img; VmaAllocation mem; VkImageView view; uint64_t seq; } Dead;
+typedef struct { VkImage img; VmaAllocation mem; VkImageView view; uint64_t seq; uint64_t mem_size; } Dead;
 static Dead *dead;
 static int ndead, cap_dead;
 static void views_forget(TexBackend *b);
@@ -543,6 +641,8 @@ void vk_collect_dead(void) {
         if (dead[i].view) dv_set(dead[i].view, true);  // (#176: the check above)
         if (dead[i].view) vk_rp_forget_view(dead[i].view), vkDestroyImageView(g_vk.dev, dead[i].view, NULL);
         else vmaDestroyImage(g_vk.vma, dead[i].img, dead[i].mem);
+        // VRAM budget: texture actually collected, remove from deferred tracking
+        if (dead[i].mem_size > 0) vram_budget_collected(dead[i].mem_size);
     }
     ndead = k;
     DEAD_UNLOCK();
@@ -605,7 +705,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
 #endif
         if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
             // If hardware ASTC HDR decoding is available and enabled, keep ASTC format
-            if (g_vk.texture_compression_astc_hdr && g_settings.astc_hw_accel) {
+            if (g_vk.texture_compression_astc_hdr && g_settings.astc_hdr_hw_accel) {
                 // Keep ASTC format, hardware will decode it
             } else {
                 b->astc_bw = fi->bw;
@@ -634,8 +734,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     if (rt_list < 0) {
         const char *e = getenv("LARECOMP_VK_RT_FORMAT_LIST");
         rt_list = e ? atoi(e) != 0 : getenv("LARECOMP_VK_NO_MUTABLE") != NULL || g_vk.props.vendorID == 0x13B5;
-        if (g_settings.afbc_advanced && g_vk.props.vendorID == 0x13B5) rt_list = 1;  // (the user setting: the Mali-G720's
-        // advanced AFBC keeps the render targets compressible - the format list; off: no compression, whole-image moves)
+        // AFBC is driver-managed; no app-level "advanced" toggle. Keep render target format override: user choice respected.
         if (rt_list) LOG("[vk] render targets without mutable formats (their sRGB twin in a format list)\n");
     }
     VkFormat twin = vf == VK_FORMAT_R8G8B8A8_UNORM ? VK_FORMAT_R8G8B8A8_SRGB : vf == VK_FORMAT_R8G8B8A8_SRGB ? VK_FORMAT_R8G8B8A8_UNORM
@@ -750,8 +849,8 @@ static void defer(Dead d) {
     DEAD_UNLOCK();
 }
 
-void vk_defer_image(VkImage img, VmaAllocation mem) { defer((Dead){.img = img, .mem = mem}); }
-void vk_defer_view(VkImageView v) { defer((Dead){.view = v}); }
+void vk_defer_image(VkImage img, VmaAllocation mem, uint64_t mem_size) { defer((Dead){.img = img, .mem = mem, .mem_size = mem_size}); }
+void vk_defer_view(VkImageView v) { defer((Dead){.view = v, .mem_size = 0}); }
 
 void vk_dl_note_upload(void *img, uint32_t w, uint32_t h, uint32_t lv);  // (exec.c: LARECOMP_VK_DEVLOST_TRACE)
 
@@ -789,9 +888,12 @@ static void destroy_image(TexBackend *b) {
 #endif
     views_forget(b);
     if (b->image || b->mem) {
-        // VRAM budget: remove from tracking before deferring
-        if (b->mem_size > 0) vram_budget_remove(b->mem_size);
-        defer((Dead){.img = b->image, .mem = b->mem});  // (never the same allocation twice)
+        // VRAM budget: remove from live tracking, add to deferred tracking
+        if (b->mem_size > 0) {
+            vram_budget_remove(b->mem_size);
+            g_vram_deferred_bytes += b->mem_size;
+        }
+        defer((Dead){.img = b->image, .mem = b->mem, .mem_size = b->mem_size});  // (never the same allocation twice)
     }
     b->image = VK_NULL_HANDLE;
     b->mem = VK_NULL_HANDLE;
@@ -976,7 +1078,9 @@ static void upload_scaled(VkCommandBuffer cb, TexBackend *b, VkSpan s, VkBufferI
     bool lin = format_supports(b->format, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
     vkCmdBlitImage(cb, img, VK_IMAGE_LAYOUT_GENERAL, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, lin ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     vk_full_barrier(cb);
-    vk_defer_image(img, mem);
+    VmaAllocationInfo alloc_info;
+    vmaGetAllocationInfo(g_vk.vma, mem, &alloc_info);
+    vk_defer_image(img, mem, alloc_info.size);
 }
 
 static void upload_pending(TexBackend *b) {

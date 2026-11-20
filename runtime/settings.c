@@ -71,15 +71,17 @@ Settings g_settings = {
     .mali_host_import = -1,  // (Mali host import: -1 auto, 0 off, 1 on)
     .vrs_mali = false,      // (Mali-G720 / Immortalis Gen4: the VK_KHR_fragment_shading_rate 2x2 on the intermediate post passes;
                             // off by default - the final pass of the chain (present / upscale / SMAA) keeps the full rate)
-    .afbc_advanced = true,  // (the Mali's advanced AFBC compression)
+    // .afbc_advanced removed: AFBC is driver-managed, no app-level toggle
     .thermal_perf = 0,      // (0: Auto - the thermal cap; 1: Performance - no app-level drop; 2: Balanced - status only)
-    .turbo_mali = false,    // (Mali-G720 Turbo mode: off by default, user must enable explicitly)
-    .async_shader_compile = true,  // (Async shader compilation: on by default for Mali-G720)
-    .astc_hw_accel = true,  // (ASTC hardware acceleration: on by default for Mali-G720)
-    .adpf_mode = -1,      // (Android Dynamic Performance Framework: -1 auto = on for API 33+, off below)
-    .sustained_perf = false,  // (Sustained Performance Mode: off by default)
-    .shader_cache = true,  // (Vulkan pipeline cache: on by default, speeds up subsequent runs)
-    .mali_preset = 0,  // (Mali GPU preset: 0 = Custom, 1 = Performance, 2 = Balanced, 3 = Quality)
+    // .turbo_mali removed: unproven overclock/thermal promises
+    .async_shader_compile = true,  // (Async shader compilation: on by default for Mali-G720). Persisted.
+    // .astc_hw_accel replaced by astc_ldr_hw_accel / astc_hdr_hw_accel
+    .astc_ldr_hw_accel = true,   // (ASTC LDR hardware decompression: on by default for Mali-G720). Persisted.
+    .astc_hdr_hw_accel = true,   // (ASTC HDR hardware decompression: on by default for Mali-G720+). Persisted.
+    .adpf_mode = -1,      // (Android Dynamic Performance Framework: -1 Auto = on for API 33+, off below). Stable disk: -1/0/1.
+    .sustained_perf = false,  // (Sustained Performance Mode: off by default). Persisted.
+    .shader_cache = true,  // (Vulkan pipeline cache: on by default, speeds up subsequent runs). Persisted.
+    .mali_preset = 0,  // (Mali GPU preset: 0 = Custom, 1 = Performance, 2 = Balanced, 3 = Quality). Custom on change.
 #else
     .show_fps = false,
 #endif
@@ -260,11 +262,13 @@ void settings_reset_defaults(void) {
     g_settings.prewarm = d->prewarm;
     g_settings.mali_host_import = d->mali_host_import;
     g_settings.vrs_mali = d->vrs_mali;
-    g_settings.afbc_advanced = d->afbc_advanced;
+    // g_settings.afbc_advanced removed
     g_settings.thermal_perf = d->thermal_perf;
-    g_settings.turbo_mali = d->turbo_mali;
+    // g_settings.turbo_mali removed
     g_settings.async_shader_compile = d->async_shader_compile;
-    g_settings.astc_hw_accel = d->astc_hw_accel;
+    // g_settings.astc_hw_accel replaced
+    g_settings.astc_ldr_hw_accel = d->astc_ldr_hw_accel;
+    g_settings.astc_hdr_hw_accel = d->astc_hdr_hw_accel;
     g_settings.adpf_mode = d->adpf_mode;
     g_settings.sustained_perf = d->sustained_perf;
     g_settings.shader_cache = d->shader_cache;
@@ -337,10 +341,12 @@ void settings_load(void) {
         else if (!strcmp(key, "prewarm")) g_settings.prewarm = atoi(val) != 0;
         else if (!strcmp(key, "mali_host_import")) g_settings.mali_host_import = atoi(val);
         else if (!strcmp(key, "vrs_mali")) g_settings.vrs_mali = atoi(val) != 0;
-        else if (!strcmp(key, "afbc_advanced")) g_settings.afbc_advanced = atoi(val) != 0;
-        else if (!strcmp(key, "turbo_mali")) g_settings.turbo_mali = atoi(val) != 0;
+        else if (!strcmp(key, "afbc_advanced")) { /* ignored: removed */ }
+        else if (!strcmp(key, "turbo_mali")) { /* ignored: removed */ }
         else if (!strcmp(key, "async_shader_compile")) g_settings.async_shader_compile = atoi(val) != 0;
-        else if (!strcmp(key, "astc_hw_accel")) g_settings.astc_hw_accel = atoi(val) != 0;
+        else if (!strcmp(key, "astc_hw_accel")) { /* legacy: map to both LDR/HDR */ g_settings.astc_ldr_hw_accel = g_settings.astc_hdr_hw_accel = atoi(val) != 0; }
+        else if (!strcmp(key, "astc_ldr_hw_accel")) g_settings.astc_ldr_hw_accel = atoi(val) != 0;
+        else if (!strcmp(key, "astc_hdr_hw_accel")) g_settings.astc_hdr_hw_accel = atoi(val) != 0;
         else if (!strcmp(key, "adpf_mode")) g_settings.adpf_mode = !strcmp(val, "auto") ? -1 : atoi(val);
         else if (!strcmp(key, "sustained_perf")) g_settings.sustained_perf = atoi(val) != 0;
         else if (!strcmp(key, "shader_cache")) g_settings.shader_cache = atoi(val) != 0;
@@ -513,11 +519,12 @@ void settings_save(void) {
     fprintf(f, "prewarm = %d\n", g_settings.prewarm);
     fprintf(f, "mali_host_import = %d\n", g_settings.mali_host_import);
     fprintf(f, "vrs_mali = %d\n", g_settings.vrs_mali);
-    fprintf(f, "afbc_advanced = %d\n", g_settings.afbc_advanced);
+    // afbc_advanced removed
     fprintf(f, "thermal_perf = %d\n", g_settings.thermal_perf);
-    fprintf(f, "turbo_mali = %d\n", g_settings.turbo_mali);
+    // turbo_mali removed
     fprintf(f, "async_shader_compile = %d\n", g_settings.async_shader_compile);
-    fprintf(f, "astc_hw_accel = %d\n", g_settings.astc_hw_accel);
+    fprintf(f, "astc_ldr_hw_accel = %d\n", g_settings.astc_ldr_hw_accel);
+    fprintf(f, "astc_hdr_hw_accel = %d\n", g_settings.astc_hdr_hw_accel);
     fprintf(f, "adpf_mode = %s\n", g_settings.adpf_mode == -1 ? "auto" : g_settings.adpf_mode ? "1" : "0");
     fprintf(f, "sustained_perf = %d\n", g_settings.sustained_perf);
     fprintf(f, "shader_cache = %d\n", g_settings.shader_cache);

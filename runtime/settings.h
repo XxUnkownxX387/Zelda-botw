@@ -74,21 +74,21 @@ typedef struct {
     int mali_host_import;  // Mali: allow guest heap import via VK_EXT_external_memory_host; -1 auto (on for Mali gen>=710, driver<r54, RAM>=11GB), 0 off, 1 on
     bool vrs_mali;       // Mali-G720 / Immortalis Gen4: VK_KHR_fragment_shading_rate reduced fragment shading rate (2x2) on the post
                          // passes (Video > VRS Mali-G720; vulkan/exec.c post_pass) - off: the full-rate passes. On with the driver.
-    bool afbc_advanced;  // Mali: the advanced AFBC texture compression (vulkan/textures.c: the format list that keeps the render
-                         // targets' AFBC-compressed); off: no compression, each pass's loads and stores move the images whole.
+    // AFBC (Arm Frame Buffer Compression) is driver-managed; no app-level "advanced" toggle.
+    // Keep render target format override: user choice of format is respected over driver defaults.
     int thermal_perf;    // Dimensity: the thermal performance mode - 0 Auto (the thermal cap: 30 fps while hot), 1 Performance (the
                          // mode holds the chosen rate while hot), 2 Balanced (the drop from the thermal status only, not the
                          // headroom forecast).
-    bool turbo_mali;     // Mali-G720: Turbo mode - forces max GPU clocks, disables thermal throttling in driver, enables
-                         // all Mali-G720 specific optimizations (VK_EXT_external_memory_host, VK_KHR_map_memory_placed,
-                         // aggressive shader compilation, max VRAM budget). Requires Mali-G720 / Immortalis Gen4.
+    // turbo_mali removed: unproven overclock/thermal promises; Mali-G720 optimizations are in mem_strategy, VRS, async shaders.
     bool async_shader_compile;  // Async shader compilation: compiles shaders on background threads while game runs,
-                                // reduces stutter on first use. On by default on Mali-G720.
-    bool astc_hw_accel;  // ASTC hardware acceleration: uses GPU-native ASTC decompression instead of CPU fallback.
-                         // On Mali-G720, enables VK_EXT_texture_compression_astc_hdr and native ASTC LDR/HDR paths.
+                                // reduces stutter on first use. Persisted. On by default on Mali-G720.
+    // ASTC hardware acceleration split: LDR (standard) and HDR (requires VK_EXT_texture_compression_astc_hdr).
+    // LDR is widely supported; HDR only on Mali-G720+ with the extension.
+    bool astc_ldr_hw_accel;   // ASTC LDR hardware decompression (native GPU path). Persisted.
+    bool astc_hdr_hw_accel;   // ASTC HDR hardware decompression (requires VK_EXT_texture_compression_astc_hdr + Mali-G720+). Persisted.
     // Mali GPU preset (Video > GPU Mali > Preset): 0 = Custom (user-modified), 1 = Performance, 2 = Balanced, 3 = Quality.
-    // Each preset sets vrs_mali, max_gpu_mem_mb, shader_parallel, res_mode, fps_mode.
-    // Selecting a preset applies those values; the user can still tweak individual settings afterward.
+    // Each preset sets vrs_mali, max_gpu_mem_mb, shader_parallel, res_mode, fps_mode, async_shader_compile, astc_ldr_hw_accel.
+    // Selecting a preset applies those values; changing any preset-controlled setting switches to Custom (0).
     int mali_preset;
     // Android Dynamic Performance Framework (ADPF, API 33+): hint the OS about frame workload for thermal / power management.
     // -1 = Auto (on for API 33+, off below), 0 = off, 1 = on. Requires a frame-time JNI callback each frame.

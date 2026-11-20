@@ -567,6 +567,10 @@ static void create_device(void) {
     if (maintenance5) ext[n_ext++] = VK_KHR_MAINTENANCE_5_EXTENSION_NAME;
 #endif
     g_vk.host_import = has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);  // guest heap as a GPU buffer (exec.c)
+    // Explicit memory strategy (the policy this backend runs on; the VKM_STRATEGY_* enum in vk.h): VKM_STRATEGY_AUTO starts from CPU Compatibility
+    // (a Mali's mode with no host import / no exported file - fd / dma-buf - and no implicit setenv, global memory
+    // through CPU copies) and moves to a real strategy once the capabilities and the driver validate it.
+    g_vk.mem_strategy = VKM_STRATEGY_AUTO;
 #ifdef __ANDROID__
     // Samsung's Xclipse driver accepts the import, then fails the first submission (VK_ERROR_UNKNOWN on a Galaxy S26,
     // reported to LASRecomp-Android-Plus; LAS Recomp for Android 4a8749f turned it off on every GPU). Here only on
@@ -654,17 +658,32 @@ static void create_device(void) {
             }
             // Settings override: -1=auto, 0=off, 1=on
             int setting = g_settings.mali_host_import;
-            
-            // FOR MALI-G720 ON 12GB+ RAM: Force enable host import, remove conservative gating
-            bool auto_on;
-            if (is_mali_g720 && is_high_ram) {
-                auto_on = true;  // Force enable for Mali-G720 on 12GB+ RAM
-                LOG("[vk] Mali-G720 on 12GB+ RAM detected: FORCING host import ON (optimized for Xiaomi 15T)\n");
-            } else {
-                auto_on = (gpu_gen >= 710) && (driver_ver < 54) && (total_ram_gb >= 11);
+
+            // Memory strategy (the explicit policy, replacing the heuristic force): Mali starts in CPU Compatibility
+            // (no host import, no exported file - fd / dma-buf - and no implicit setenv; global memory through CPU
+            // copies) and only auto-moves to a real host import once the capabilities and the driver validate it
+            // (VKM_STRATEGY_AUTO: start from CPU Compat, move when validated; VKM_STRATEGY_CPU_COMPAT: pin there;
+            // VKM_STRATEGY_HOST_IMPORT: pin on). The old heuristic force for Mali-G720 on 12 GB+ RAM is gone.
+            bool auto_on = false;
+            if (g_vk.mem_strategy == VKM_STRATEGY_CPU_COMPAT) {
+                auto_on = false;  // CPU Compatibility: no import, whatever the GPU generation / driver version / RAM
+            } else if (g_vk.mem_strategy == VKM_STRATEGY_HOST_IMPORT) {
+                auto_on = true;  // the strategy asked for the import
+            } else {  // VKM_STRATEGY_AUTO: start from CPU Compatibility, move once the capabilities + driver validate it
+                bool validated = (gpu_gen >= 710) && (driver_ver < 54) && (total_ram_gb >= 11);
+                auto_on = validated;
             }
-            LOG("[vk] Mali host import auto: gpu_gen=%d, driver_ver=r%d.p%d, ram=%d GB, is_g720=%d, high_ram=%d -> %s\n",
-                gpu_gen, driver_ver, g_vk.mali_driver_minor, total_ram_gb, is_mali_g720, is_high_ram, auto_on ? "on" : "off");
+            if (g_vk.mem_strategy == VKM_STRATEGY_CPU_COMPAT) {
+                // CPU Compatibility: no import, whatever the GPU generation / driver version / RAM say; the exported
+                // file (fd / dma-buf) is dropped below, once the capability flags are read.
+                g_vk.host_import = false;
+            }
+            LOG("[vk] Mali memory strategy: requested %d (VKM_STRATEGY_CPU_COMPAT=0, HOST_IMPORT=1, PLACED=2, FILE=3, AUTO=4) -> effective %s (reason: %s; gpu_gen=%d, driver r%d.p%d, ram=%d GB, is_g720=%d, high_ram=%d)\n",
+                g_vk.mem_strategy, g_vk.host_import ? "VKM_STRATEGY_HOST_IMPORT" : "VKM_STRATEGY_CPU_COMPAT",
+                g_vk.mem_strategy == VKM_STRATEGY_CPU_COMPAT ? "pinned CPU compat (zero import, zero export fd/dma-buf, copies)" :
+                (auto_on ? "auto moved to host import (capabilities + driver validated)" : "auto stayed on CPU compat (not validated)"),
+                gpu_gen, driver_ver, g_vk.mali_driver_minor, total_ram_gb, is_mali_g720, is_high_ram);
+            LOG("[vk] Mali host import resolved: %s\n", g_vk.host_import ? "on (VKM_STRATEGY_HOST_IMPORT)" : "off (VKM_STRATEGY_CPU_COMPAT)");
             if (setting == 1) {
                 g_vk.host_import = true;
             } else if (setting == 0) {
@@ -716,14 +735,32 @@ static void create_device(void) {
     // (a dma-buf, the other file type: where the opaque one takes no memory the CPU can use - Xclipse 530, #234)
     g_vk.mem_dmabuf = g_vk.mem_fd && has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
     if (g_vk.mem_dmabuf) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME;
+    // Memory strategy: CPU Compatibility (Mali's mode) means no exported file either - zero fd / dma-buf - with the
+    // global memory through CPU copies (the strategy, not the raw capability flags alone, decides what is used).
+    if (g_vk.props.vendorID == 0x13B5 && g_vk.mem_strategy == VKM_STRATEGY_CPU_COMPAT) {
+        g_vk.mem_fd = false;
+        g_vk.mem_dmabuf = false;
+    }
     // VK_EXT_attachment_feedback_loop_layout: allows sampling a render target while it's being written (feedback loop)
     // Turnip (Adreno 8xx) and Mali (r54p1+) support this - enables in-place feedback reads, avoiding fbcopy snapshots.
+    // An advertised extension does not mean the feature is active: ask for it and read the answer (the same way the
+    // VK_KHR_fragment_shading_rate query asks for the supported rates), else the backend stays on the snapshots - in
+    // place is only used when the feature and the path behind it are really on.
     g_vk.feedback_loop_layout = has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
+    {
+        VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT q_fbl = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT};
+        if (g_vk.feedback_loop_layout) {
+            VkPhysicalDeviceFeatures2 f_fbl = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &q_fbl};
+            vkGetPhysicalDeviceFeatures2(g_vk.phys, &f_fbl);
+            g_vk.feedback_loop_layout = q_fbl.attachmentFeedbackLoopLayout;
+        }
+    }
     if (g_vk.feedback_loop_layout) ext[n_ext++] = VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME;
     // VK_EXT_texture_compression_astc_hdr: hardware ASTC HDR decoding (Mali-G720 etc.)
-    if (g_settings.astc_hw_accel && has_ext(ep, ne, VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME)) {
+    if (g_settings.astc_hdr_hw_accel && has_ext(ep, ne, VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME)) {
         ext[n_ext++] = VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME;
-        LOG("[vk-cap] VK_EXT_texture_compression_astc_hdr enabled (astc_hw_accel setting)\n");
+        LOG("[vk-cap] VK_EXT_texture_compression_astc_hdr enabled (astc_hdr_hw_accel setting)\n");
     }
     // (which ways this driver could export memory at all: a report from a Mali or an Xclipse says what to try next -
     // the option did nothing on a Mali-G720 r49p1 with no word in the log, #249)
@@ -1040,10 +1077,13 @@ static void create_device(void) {
                                   .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = g_vk.qfam};
     VK_CHECK(vkCreateCommandPool(g_vk.dev, &pi, NULL, &g_vk.pool));
 
-    // pipeline cache: <data root>/pipeline_cache.bin (written by vk_pipeline_cache_save; LARECOMP_VK_NO_PIPELINE_CACHE=1:
-    // neither read nor written - every pipeline compiled cold, for measuring).
-    // Controlled by g_settings.shader_cache (menu option "Shader Cache"). Validates header: vendorID, deviceID,
-    // pipelineCacheUUID. Logs load time.
+    // pipeline cache: <data root>/pipeline_cache.bin
+    // Controlled by g_settings.shader_cache (menu option "Shader Cache").
+    // Validates header: vendorID, deviceID, pipelineCacheUUID (VK_PIPELINE_CACHE_HEADER_VERSION_ONE).
+    // NOTE: This is the Vulkan pipeline cache (compiled pipelines), NOT a SPIR-V shader module cache.
+    // SPIR-V cache would store pre-translated shader modules; pipeline cache stores driver-compiled
+    // pipeline objects (VkPipeline) which include driver-specific optimizations and state.
+    // The cache is keyed by GPU (vendorID/deviceID/UUID) - a cache from a different GPU is rejected.
     size_t sz = 0;
     void *data = NULL;
     if (g_settings.shader_cache && !getenv("LARECOMP_VK_NO_PIPELINE_CACHE")) {
@@ -1086,54 +1126,159 @@ static void create_device(void) {
     free(data);
 }
 
-void vk_pipeline_cache_save(void) {
+// Pipeline cache state (serialized by g_cache_mutex)
+static pthread_mutex_t g_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_cache_cond = PTHREAD_COND_INITIALIZER;
+static pthread_t g_cache_save_thread = 0;
+static volatile bool g_cache_save_running = false;
+static volatile bool g_cache_save_requested = false;
+static volatile bool g_cache_clear_requested = false;
+static volatile bool g_device_ready = false;  // set true after vk_pcache is created
+
+// Internal: save pipeline cache to disk (caller holds g_cache_mutex)
+static void vk_pipeline_cache_save_locked(void) {
     if (getenv("LARECOMP_VK_NO_PIPELINE_CACHE")) return;
     if (!g_settings.shader_cache) return;
+    if (!g_device_ready || !g_vk.pcache) return;  // device not ready or no cache
+    
     size_t sz = 0;
-    if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, NULL) != VK_SUCCESS || !sz) return;
+    VkResult r = vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, NULL);
+    if (r != VK_SUCCESS || sz == 0) {
+        if (r == VK_INCOMPLETE) LOG("[vk-cache] cache data incomplete, skipping save\n");
+        return;
+    }
     void *data = malloc(sz);
-    if (vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, data) == VK_SUCCESS) {
-        char path[1024], tmp_path[1024];
-        snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
-        snprintf(tmp_path, sizeof tmp_path, "%s/pipeline_cache.bin.tmp", rt_data_root());
-        FILE *f = fopen(tmp_path, "wb");
-        if (f) {
-            bool ok = fwrite(data, 1, sz, f) == sz;
-            fclose(f);
-            if (ok) {
-                remove(path);
-                rename(tmp_path, path);
-                LOG("[vk-cache] saved %zu bytes to %s\n", sz, path);
-            }
+    if (!data) return;
+    r = vkGetPipelineCacheData(g_vk.dev, g_vk.pcache, &sz, data);
+    if (r != VK_SUCCESS) {
+        free(data);
+        if (r == VK_INCOMPLETE) LOG("[vk-cache] cache data incomplete on read, skipping save\n");
+        return;
+    }
+    char path[1024], tmp_path[1024];
+    snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
+    snprintf(tmp_path, sizeof tmp_path, "%s/pipeline_cache.bin.tmp", rt_data_root());
+    FILE *f = fopen(tmp_path, "wb");
+    if (!f) { free(data); return; }
+    bool ok = fwrite(data, 1, sz, f) == sz;
+    if (fflush(f) != 0 || fsync(fileno(f)) != 0) ok = false;
+    fclose(f);
+    if (ok) {
+        // Atomic replace: rename tmp over target (no remove first - rename is atomic on POSIX)
+        if (rename(tmp_path, path) == 0) {
+            LOG("[vk-cache] saved %zu bytes to %s\n", sz, path);
+        } else {
+            remove(tmp_path);  // cleanup on rename failure
         }
+    } else {
+        remove(tmp_path);
     }
     free(data);
 }
 
-// Periodic pipeline cache save (every 5 minutes) - called from a timer thread
-static pthread_t g_cache_save_thread = 0;
-static atomic_bool g_cache_save_running = ATOMIC_VAR_INIT(false);
+void vk_pipeline_cache_save(void) {
+    pthread_mutex_lock(&g_cache_mutex);
+    if (g_device_ready && g_vk.pcache && g_settings.shader_cache && !getenv("LARECOMP_VK_NO_PIPELINE_CACHE")) {
+        vk_pipeline_cache_save_locked();
+    }
+    pthread_mutex_unlock(&g_cache_mutex);
+}
 
+// Periodic pipeline cache save thread (every 5 minutes)
+// Uses cancellable delay via condition variable; joins on stop (no detached thread surviving reset)
 static void *cache_save_timer(void *arg) {
     (void)arg;
-    while (atomic_load(&g_cache_save_running)) {
-        sleep(300);  // 5 minutes
-        if (!atomic_load(&g_cache_save_running)) break;
-        vk_pipeline_cache_save();
+    pthread_mutex_lock(&g_cache_mutex);
+    while (g_cache_save_running) {
+        // Wait up to 300s (5 min) for a save request or timeout
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 300;
+        int rc = pthread_cond_timedwait(&g_cache_cond, &g_cache_mutex, &ts);
+        if (rc == ETIMEDOUT || g_cache_save_requested) {
+            g_cache_save_requested = false;
+            if (g_cache_save_running && g_device_ready && g_vk.pcache && g_settings.shader_cache && !getenv("LARECOMP_VK_NO_PIPELINE_CACHE")) {
+                vk_pipeline_cache_save_locked();
+            }
+        }
+        // If woken by signal (stop requested), loop will exit via g_cache_save_running check
     }
+    pthread_mutex_unlock(&g_cache_mutex);
     return NULL;
 }
 
 void vk_pipeline_cache_start_periodic_save(void) {
-    if (!g_settings.shader_cache) return;
-    if (atomic_load(&g_cache_save_running)) return;
-    atomic_store(&g_cache_save_running, true);
+    pthread_mutex_lock(&g_cache_mutex);
+    if (!g_settings.shader_cache || g_cache_save_running) {
+        pthread_mutex_unlock(&g_cache_mutex);
+        return;
+    }
+    g_device_ready = true;
+    g_cache_save_running = true;
     pthread_create(&g_cache_save_thread, NULL, cache_save_timer, NULL);
-    pthread_detach(g_cache_save_thread);
+    // NOT detached - we join in vk_pipeline_cache_stop_periodic_save
+    pthread_mutex_unlock(&g_cache_mutex);
 }
 
 void vk_pipeline_cache_stop_periodic_save(void) {
-    atomic_store(&g_cache_save_running, false);
+    pthread_mutex_lock(&g_cache_mutex);
+    if (!g_cache_save_running) {
+        pthread_mutex_unlock(&g_cache_mutex);
+        return;
+    }
+    g_cache_save_running = false;
+    pthread_cond_signal(&g_cache_cond);
+    pthread_t thread = g_cache_save_thread;
+    g_cache_save_thread = 0;
+    g_device_ready = false;
+    pthread_mutex_unlock(&g_cache_mutex);
+    if (thread) pthread_join(thread, NULL);  // wait for stop before teardown
+}
+
+// Request a save from any thread (non-blocking, safe if device not ready)
+void vk_pipeline_cache_request_save(void) {
+    pthread_mutex_lock(&g_cache_mutex);
+    if (g_cache_save_running && g_settings.shader_cache && !getenv("LARECOMP_VK_NO_PIPELINE_CACHE")) {
+        g_cache_save_requested = true;
+        pthread_cond_signal(&g_cache_cond);
+    }
+    pthread_mutex_unlock(&g_cache_mutex);
+}
+
+// Clear pipeline cache file (atomic, not cancelled by in-memory save)
+// Caller does NOT hold g_cache_mutex; this takes the mutex internally
+void vk_pipeline_cache_clear(void) {
+    pthread_mutex_lock(&g_cache_mutex);
+    g_cache_clear_requested = true;
+    // Cancel any pending save request to avoid race with clear
+    g_cache_save_requested = false;
+    pthread_mutex_unlock(&g_cache_mutex);
+    
+    char path[1024];
+    snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
+    if (remove(path) == 0) {
+        LOG("[vk-cache] shader cache cleared by user\n");
+    } else {
+        LOG("[vk-cache] shader cache clear: no file to remove\n");
+    }
+    
+    pthread_mutex_lock(&g_cache_mutex);
+    g_cache_clear_requested = false;
+    pthread_mutex_unlock(&g_cache_mutex);
+}
+
+// Check if cache file exists and is compatible (for diagnostics)
+bool vk_pipeline_cache_is_compatible(void) {
+    if (!g_settings.shader_cache) return false;
+    char path[1024];
+    snprintf(path, sizeof path, "%s/pipeline_cache.bin", rt_data_root());
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return false;
+    uint8_t header[32];
+    bool ok = fread(header, 1, 32, fp) == 32;
+    fclose(fp);
+    if (!ok) return false;
+    return vk_backend_cache_compatible(header, 32, &g_vk.props);
 }
 
 // ================================================================== swapchain
@@ -2319,6 +2464,34 @@ bool vk_driver_is_turnip(void) {
     }
     return t > 0;
 }
+
+// Benchmark accessors
+const char *vk_driver_version(void) {
+    static char s[128];
+    if (s[0] || !g_vk.phys) return s;
+    VkPhysicalDeviceDriverProperties d = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 p = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &d};
+    vkGetPhysicalDeviceProperties2(g_vk.phys, &p);
+    snprintf(s, sizeof s, "%s", d.driverInfo);
+    for (char *c = s; *c; c++) if (*c == '\n' || *c == '\r') *c = ' ';
+    return s;
+}
+int vk_api_version(void) { return g_vk.props.apiVersion; }
+int vk_mali_driver_major(void) { return g_vk.mali_driver_major; }
+int vk_mali_driver_minor(void) { return g_vk.mali_driver_minor; }
+int vk_mem_strategy(void) { return g_vk.mem_strategy; }
+
+bool vk_fragment_shading_rate(void) { return g_vk.fragment_shading_rate; }
+bool vk_astc_hdr(void) { return g_vk.texture_compression_astc_hdr; }
+bool vk_maintenance5(void) { return g_vk.api >= VK_API_VERSION_1_3 || true; }  // always available on Android 1.3+
+bool vk_sync2(void) { return g_vk.sync2; }
+bool vk_dynamic_rendering(void) { return g_vk.dyn_render; }
+bool vk_external_memory_host(void) { return g_vk.host_import; }
+bool vk_map_memory_placed(void) { return g_vk.map_placed; }
+bool vk_external_memory_fd(void) { return g_vk.mem_fd; }
+bool vk_external_memory_dmabuf(void) { return g_vk.mem_dmabuf; }
+bool vk_feedback_loop_layout(void) { return g_vk.feedback_loop_layout; }
+
 // Mali (ARM Immortalis Mali, the Mali-G720 family): the Mali GPUs (vendorID 0x13B5) - the Mali options are only for
 // them, the menu's "GPU Mali" section and the launcher's Mali rows (device.c / ui/menu.mm, ui/launcher.mm)
 bool vk_mali_detected(void) { return g_vk.props.vendorID == 0x13B5; }

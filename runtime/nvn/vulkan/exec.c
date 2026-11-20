@@ -895,23 +895,12 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
                                      .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}};
     VkSemaphoreSubmitInfo wt = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, .semaphore = wait,
                                 .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
-    
-    // Mali-G720 turbo: use more specific stage masks to reduce unnecessary synchronization
-    // Only use ALL_COMMANDS_BIT for actual present submissions, not for intermediate submits
-    bool is_mali_g720_turbo = false;
-#ifdef __ANDROID__
-    if (g_settings.turbo_mali && g_vk.props.vendorID == 0x13B5) {
-        const char *name = g_vk.props.deviceName;
-        if (strstr(name, "Mali-G720") || strstr(name, "Immortalis-G720")) {
-            // For Mali-G720 turbo: use more specific stage masks
-            if (!wait && !signal) {
-                // Regular submit: only need FRAGMENT_SHADER and COLOR_ATTACHMENT_OUTPUT
-                sig[0].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                sig[1].stageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-            }
-        }
-    }
-#endif
+
+    // The Mali-G720 "turbo" submission branch is gone: every submission completes through the timeline semaphore with
+    // VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT (the sig[] masks above), on every submission - the removed narrower stage
+    // masks for the intermediate submits were not a synchronization win, and the branch's overclock promises (forced
+    // clocks / thermal throttling) were not kept by the driver. The old INI keys (settings.turbo_mali among them) are
+    // still read for compatibility; nothing else changes.
 
     VkSubmitInfo2 si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2, .commandBufferInfoCount = (uint32_t)n, .pCommandBufferInfos = cbs,
                         .signalSemaphoreInfoCount = signal ? 2 : 1, .pSignalSemaphoreInfos = sig,
@@ -1447,6 +1436,26 @@ static uint64_t skipped_before, compiles_before;
 uint64_t vk_skipped_total(void) { return skipped_before + stat_skipped; }
 uint64_t vk_skipped_building_total(void) { return stat_skipped_building; }
 uint64_t vk_compiles_total(void) { return compiles_before + (uint64_t)atomic_load(&stat_compiles); }
+
+// Benchmark accessors
+uint64_t vk_upload_bytes(void) { return stat_upload_bytes; }
+uint64_t vk_feedback_copies(void) { return stat_feedback_copies; }
+uint64_t vk_feedback_reads(void) { return stat_feedback_reads; }
+uint64_t vk_inplace_breaks(void) { return stat_inplace_breaks; }
+uint64_t vk_pipe_binds(void) { return stat_pipe_binds; }
+uint64_t vk_set_binds(void) { return stat_set_binds; }
+uint64_t vk_cb_bytes(int which) { return which >= 0 && which < 2 ? stat_cb_bytes[which] : 0; }
+uint64_t vk_cb_copied(void) { return stat_cb_copied; }
+uint64_t vk_cbwin(void) { return stat_cbwin; }
+uint64_t vk_submissions(void) { return submit_seq; }
+uint64_t vk_image_copies(void) { return stat_feedback_copies; }  // same as feedback copies for now
+uint64_t vk_buffer_copies(void) { return 0; }  // not tracked separately
+
+int vk_pss_mb(void) {
+    // PSS from Android (polled via JNI)
+    extern int g_android_pss_mb;  // from platform/android.c
+    return g_android_pss_mb;
+}
 
 const char *renderer_stats(void) {
     static int dumps;
@@ -3890,9 +3899,10 @@ static TexBackend *snapshot_image(NvnTexture *t, TexBackend *src) {
     if (d->image && (d->width != src->width || d->height != src->height || d->format != src->format || d->layers != nl ||
                      d->levels != nm)) {
         vk_views_forget(d);  // (resolution change)
-        vk_defer_image(d->image, d->mem);
+        vk_defer_image(d->image, d->mem, d->mem_size);
         d->image = VK_NULL_HANDLE;
         d->mem = VK_NULL_HANDLE;
+        d->mem_size = 0;
     }
     if (!d->image) {
         VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = src->format,
@@ -4178,11 +4188,18 @@ static void resolve_feedback(Prog *pr, uint32_t draw_written) {
                     extern bool vk_turnip_path_on(int setting);
                     // VK_EXT_attachment_feedback_loop_layout enables in-place feedback reads (sampling a target the pass writes)
                     // Turnip (Adreno 8xx) and Mali (r54p1+) support this - avoids fbcopy snapshots (~5000-9600 copies/frame in log).
-                    // For Mali without the extension, force in-place reads (the driver handles it correctly on G720).
+                    // Only the writes before the game's last barrier (NVN's rule) left the ground dark: its draws don't
+                    // fence every write they then read. Sampling a target the pass writes is a feedback loop Vulkan leaves
+                    // undefined (without VK_EXT_attachment_feedback_loop_layout): on Turnip only, where it was checked
+                    // frame by frame on the Adreno 830 - Automatic keeps it to the Adreno 8xx (settings.h inplace_reads,
+                    // the start screen's Driver compatibility; LARECOMP_FEEDBACK_INPLACE=1 on any driver).
+                    // Mali is NOT forced in place any more (the vendorID-forced in-place was reverted): with the capability
+                    // validated at device level (feedback_loop_layout: extension AND feature), a Mali keeps the snapshots
+                    // unless that validation really passed - LARECOMP_FEEDBACK_INPLACE=1 still forces in place on any
+                    // driver, the Turnip policy is untouched.
                     bool inplace = getenv("LARECOMP_FEEDBACK_INPLACE") ||
                                    (vk_driver_is_turnip() && vk_turnip_path_on(g_settings.inplace_reads)) ||
-                                   (g_vk.feedback_loop_layout && g_vk.props.vendorID == 0x13B5) ||  // Mali with extension
-                                   (g_vk.props.vendorID == 0x13B5);  // Mali G720: force in-place (no extension needed)
+                                   (g_vk.feedback_loop_layout && g_vk.props.vendorID == 0x13B5);  // Mali: capability checked, not forced
                     g_inplace_copy = getenv("LARECOMP_FEEDBACK_COPY") != NULL || !inplace;
                     LOG("[vk] targets a draw writes, sampled by it: %s (%s)\n", g_inplace_copy ? "copies" : "in place",
                         g_settings.inplace_reads < 0 ? "automatic" : "settings");
@@ -4747,6 +4764,10 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
 // (VK_EXT_external_memory_host), zero-copy like metal.m's g_guest_buffer, so compute results land in guest
 // memory. The import pins its pages, so it covers only the heap the game set up (SetHeapSize), made on first use.
 // LARECOMP_VK_NO_GMEM=1: no import, reads return zero.
+// The policy is explicit (the memory strategy of the backend: the VKM_STRATEGY_* enum in vk.h; Mali runs in CPU Compatibility until the
+// driver + capabilities validate an import - device.c): here the requested strategy is VKM_STRATEGY_HOST_IMPORT and the
+// effective one is this import; a failure falls back to CPU Compatibility (the caller: exec.c vk_heap_place), and the
+// failure reason is logged. The heap is imported at HEAP_BASE, 64 KB aligned, within HEAP_MAX.
 static VkBuffer gmem_buf;
 static VkDeviceMemory gmem_mem;
 static uint64_t gmem_size;
@@ -4845,24 +4866,41 @@ bool gmem_import(uint64_t size) {
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
-    if (!props || props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)HEAP_BASE, &mp) != VK_SUCCESS ||
-        !mp.memoryTypeBits)
+    // The requested import is the strategy's VKM_STRATEGY_HOST_IMPORT for the guest heap at HEAP_BASE (size + 64 KB alignment,
+    // within HEAP_MAX); a bad request / a driver that answers without a usable memory type means "not available here".
+    if (size > HEAP_MAX || (size & 0xFFFFull) || !props || props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, (void *)(uintptr_t)HEAP_BASE, &mp) != VK_SUCCESS || !mp.memoryTypeBits) {
+        LOG("[vk] guest heap import: not available here (size %llu MB, host pointer %llx, memoryTypeBits 0x%llx)\n",
+            (unsigned long long)(size >> 20), (unsigned long long)HEAP_BASE, (unsigned long long)mp.memoryTypeBits);
         return false;
+    }
     VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
                                             .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
                                             .pHostPointer = (void *)(uintptr_t)HEAP_BASE};
     VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = size,
                                .memoryTypeIndex = (uint32_t)__builtin_ctz(mp.memoryTypeBits)};
     VkDeviceMemory mem;
-    if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) return false;
+    VkResult ar = vkAllocateMemory(g_vk.dev, &ai, NULL, &mem);
     VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = size,
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
     VkBuffer buf;
-    if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
-    vkBindBufferMemory(g_vk.dev, buf, mem, 0);
+    VkResult cr = vkCreateBuffer(g_vk.dev, &bi, NULL, &buf);
+    if (ar != VK_SUCCESS || cr != VK_SUCCESS) {
+        if (mem) vkFreeMemory(g_vk.dev, mem, NULL);
+        if (buf) vkDestroyBuffer(g_vk.dev, buf, NULL);
+        LOG("[vk] guest heap import: failed (buffer %d, memory %d, strategy %s - CPU Compatibility fallback)\n", cr, ar, "VKM_STRATEGY_HOST_IMPORT");
+        return false;
+    }
+    // The buffer is bound only when the memory binds: gmem_buf / gmem_mem are published after vkBindBufferMemory
+    // succeeds (the old import may still be in use by submitted work - wait for it first).
+    if (vkBindBufferMemory(g_vk.dev, buf, mem, 0) != VK_SUCCESS) {
+        vkDestroyBuffer(g_vk.dev, buf, NULL);
+        vkFreeMemory(g_vk.dev, mem, NULL);
+        LOG("[vk] guest heap import: vkBindBufferMemory failed - not published, CPU Compatibility fallback\n");
+        return false;
+    }
     if (gmem_buf) {  // the heap grew: the old import may still be in use by submitted work
         vk_wait_seq(submit_seq);
         vkDestroyBuffer(g_vk.dev, gmem_buf, NULL);
@@ -4871,7 +4909,7 @@ bool gmem_import(uint64_t size) {
     gmem_buf = buf;
     gmem_mem = mem;
     gmem_size = size;
-    LOG("[vk] guest heap imported for shader global memory: %llu MB\n", (unsigned long long)(size >> 20));
+    LOG("[vk] guest heap imported for shader global memory: %llu MB (strategy VKM_STRATEGY_HOST_IMPORT, effective %s)\n", (unsigned long long)(size >> 20), "on");
     return true;
 }
 
@@ -8336,9 +8374,10 @@ static TexBackend *post_image(int i, uint32_t w, uint32_t h, VkFormat f) {
     TexBackend *d = &img[i];
     if (d->image && (d->width != w || d->height != h || d->format != f)) {
         vk_views_forget(d);
-        vk_defer_image(d->image, d->mem);
+        vk_defer_image(d->image, d->mem, d->mem_size);
         d->image = VK_NULL_HANDLE;
         d->mem = VK_NULL_HANDLE;
+        d->mem_size = 0;
     }
     if (!d->image) {
         // (the scene's EASU output, A2B10G10R10: compressed (UBWC) on Turnip, RCAS's texelFetch of it read 16x4 blocks
@@ -8421,15 +8460,20 @@ static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *src
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
-    if (g_vk.fragment_shading_rate) {  // Always set fragment shading rate when the feature is enabled
-        VkExtent2D fsr = vrs && g_settings.vrs_mali ? (VkExtent2D){2, 2} : (VkExtent2D){1, 1};
+    // VK_KHR_fragment_shading_rate: the reduced fragment shading rate (2x2: the intermediates shade a quarter of
+    // their fragments - the Mali-G720 / Immortalis Gen4 with VRS) when this pass runs with VRS on and the device
+    // validated the 2x2 rate for it (g_vk.fsr_2x2, asked at capability time: the device's supported rates; the post
+    // passes render single-sampled, so the pass's sample count is 1 and the validated rate applies). VRS Off by
+    // default: the rate is then kept at the full one (no set / reset pair is issued - keep shading at full rate).
+    if (vrs && g_settings.vrs_mali && g_vk.fragment_shading_rate && g_vk.fsr_2x2) {  // (2x2 reduced shading rate: VRS on)
+        VkExtent2D fsr = (VkExtent2D){2, 2};
         VkFragmentShadingRateCombinerOpKHR fc[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
                                                   VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR};
         vkCmdSetFragmentShadingRateKHR(cb, &fsr, fc);
     }
     ss.known &= ~SS_SETS;  // (another layout: the draws' sets are bound again)
     vkCmdDraw(cb, 3, 1, 0, 0);
-    if (g_vk.fragment_shading_rate) {  // Reset to full rate after draw if we used reduced rate
+    if (vrs && g_settings.vrs_mali && g_vk.fragment_shading_rate && g_vk.fsr_2x2) {  // (reset to full rate: keep it when VRS is off)
         VkExtent2D fsr = {1, 1};
         VkFragmentShadingRateCombinerOpKHR fc[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR,
                                                   VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR};

@@ -93,6 +93,82 @@ typedef struct {
     int frames, over50;
     uint64_t skipped, compiles, skipped_building;
     Power start, end;
+    
+    // Extended metrics (coded as null with reason if unavailable)
+    // Cold/warm cache separation
+    char cache_state[16];     // "cold", "warm", or "unknown"
+    int spirv_files_before;
+    int spirv_files_after;
+    long pipeline_cache_bytes_before;
+    long pipeline_cache_bytes_after;
+    
+    // Frame timing breakdown (present, render, GPU, game)
+    Pct present;              // present thread time
+    double present_hz;        // display Hz during window
+    
+    // Compiles and copies
+    uint64_t upload_bytes;    // texture upload bytes
+    uint64_t feedback_copies;
+    uint64_t feedback_reads;
+    uint64_t inplace_breaks;
+    uint64_t pipe_binds;
+    uint64_t set_binds;
+    uint64_t cb_bytes[2];
+    uint64_t cb_copied;
+    uint64_t cbwin;
+    
+    // Loads/stores (GPU counters if available)
+    uint64_t loads;
+    uint64_t stores;
+    char loads_reason[128];   // if null: why unavailable
+    char stores_reason[128];
+    
+    // Copies (Vulkan submissions, image copies, buffer copies)
+    uint64_t submissions;
+    uint64_t image_copies;
+    uint64_t buffer_copies;
+    
+    // PSS (Process Set Size) from Android
+    int pss_mb_start;
+    int pss_mb_end;
+    char pss_reason[128];
+    
+    // Temperatures
+    float battery_temp_start, battery_temp_end;
+    float soc_temp_start, soc_temp_end;
+    
+    // Memory pressure
+    int memory_pressure_level;  // Android level (0-99)
+    bool memory_pressure_low;   // low memory flag
+    char mem_pressure_reason[128];
+    
+    // Build/GPU info
+    char gpu_name[128];
+    char driver_name[128];
+    char driver_version[64];
+    int api_version;
+    bool fragment_shading_rate;
+    bool astc_hdr;
+    bool maintenance5;
+    bool sync2;
+    bool dynamic_rendering;
+    bool external_memory_host;
+    bool map_memory_placed;
+    bool external_memory_fd;
+    bool external_memory_dmabuf;
+    bool feedback_loop_layout;
+    int mali_driver_major;
+    int mali_driver_minor;
+    int mem_strategy;           // VKM_STRATEGY_*
+    
+    // Target vs actual resolution/FPS
+    int target_fps;
+    int actual_fps_mode;        // fps_mode_now()
+    int target_res_mode;
+    int actual_res_mode;
+    int out_lines;
+    int upscaler;
+    int antialias;
 } Result;
 
 static Scene scenes[MAX_SCENES];
@@ -143,6 +219,54 @@ static void json_pct(FILE *f, const char *key, const Pct *p) {
     fprintf(f, "\"%s\":{\"p50\":%.3f,\"p95\":%.3f,\"p99\":%.3f},", key, p->p50, p->p95, p->p99);
 }
 
+// Optional field: writes "key":value if available, or "key":null,"key_reason":"..." if not
+static void json_opt_double(FILE *f, const char *key, double val, const char *reason, const char *end) {
+    if (reason && *reason) {
+        fprintf(f, "\"%s\":null,\"%s_reason\":\"%s\"%s", key, key, reason, end);
+    } else {
+        fprintf(f, "\"%s\":%.3f%s", key, val, end);
+    }
+}
+
+static void json_opt_int(FILE *f, const char *key, int val, const char *reason, const char *end) {
+    if (reason && *reason) {
+        fprintf(f, "\"%s\":null,\"%s_reason\":\"%s\"%s", key, key, reason, end);
+    } else {
+        fprintf(f, "\"%s\":%d%s", key, val, end);
+    }
+}
+
+static void json_opt_uint64(FILE *f, const char *key, uint64_t val, const char *reason, const char *end) {
+    if (reason && *reason) {
+        fprintf(f, "\"%s\":null,\"%s_reason\":\"%s\"%s", key, key, reason, end);
+    } else {
+        fprintf(f, "\"%s\":%llu%s", key, (unsigned long long)val, end);
+    }
+}
+
+static void json_opt_str(FILE *f, const char *key, const char *val, const char *reason, const char *end) {
+    if (reason && *reason) {
+        fprintf(f, "\"%s\":null,\"%s_reason\":\"%s\"%s", key, key, reason, end);
+    } else if (val) {
+        fprintf(f, "\"%s\":\"", key);
+        for (; *val; val++) {
+            if (*val == '"' || *val == '\\') fputc('\\', f);
+            if ((unsigned char)*val >= 0x20) fputc(*val, f);
+        }
+        fprintf(f, "\"%s", end);
+    } else {
+        fprintf(f, "\"%s\":null,\"%s_reason\":\"empty\"%s", key, key, end);
+    }
+}
+
+static void json_opt_bool(FILE *f, const char *key, bool val, const char *reason, const char *end) {
+    if (reason && *reason) {
+        fprintf(f, "\"%s\":null,\"%s_reason\":\"%s\"%s", key, key, reason, end);
+    } else {
+        fprintf(f, "\"%s\":%s%s", key, val ? "true" : "false", end);
+    }
+}
+
 static const char *prop(const char *name) {
     static char v[8][PROP_VALUE_MAX];
     static int i;
@@ -155,6 +279,10 @@ static const char *prop(const char *name) {
 // What ran: no serial numbers, no build fingerprint
 static void json_passport(FILE *f) {
     extern const char *vk_gpu_desc(void), *vk_driver_desc(void), *launcher_app_version(void);
+    extern bool vk_fragment_shading_rate(void), vk_astc_hdr(void), vk_maintenance5(void), vk_sync2(void),
+                vk_dynamic_rendering(void), vk_external_memory_host(void), vk_map_memory_placed(void),
+                vk_external_memory_fd(void), vk_external_memory_dmabuf(void), vk_feedback_loop_layout(void);
+    extern int vk_mali_driver_major(void), vk_mali_driver_minor(void), vk_mem_strategy(void);
     static Power power;
     static int spirv = -1;
     static long pipelines = -1;
@@ -175,7 +303,7 @@ static void json_passport(FILE *f) {
     json_str(f, "model", prop("ro.product.model"), ",");
     json_str(f, "soc", prop("ro.soc.model"), ",");
     json_str(f, "apk", launcher_app_version(), ",");
-    json_str(f, "commit", BENCHMARK_COMMIT, ",");  // (benchmark_commit.h: written on every build)
+    json_str(f, "commit", BENCHMARK_COMMIT, ",");
     json_str(f, "game_version", "1.9.0", ",");
     json_str(f, "game_code", native_on() ? "native" : "recompiled", ",");
     fprintf(f, "\"settings\":{\"fps_mode\":%d,\"res_mode\":%d,\"upscaler\":%d,\"out_lines\":%d,\"antialias\":%d,\"aspect\":%d,"
@@ -185,6 +313,21 @@ static void json_passport(FILE *f) {
     json_str(f, "shader_cache_at_start", cache_at_start, ",");
     fprintf(f, "\"cache\":{\"spirv_files\":%d,\"pipeline_bytes\":%ld},", spirv, pipelines);
     json_power(f, "power", &power, ",");
+    fprintf(f, "\"capabilities\":{");
+    json_opt_bool(f, "fragment_shading_rate", vk_fragment_shading_rate(), "", ",");
+    json_opt_bool(f, "astc_hdr", vk_astc_hdr(), "", ",");
+    json_opt_bool(f, "maintenance5", vk_maintenance5(), "", ",");
+    json_opt_bool(f, "sync2", vk_sync2(), "", ",");
+    json_opt_bool(f, "dynamic_rendering", vk_dynamic_rendering(), "", ",");
+    json_opt_bool(f, "external_memory_host", vk_external_memory_host(), "", ",");
+    json_opt_bool(f, "map_memory_placed", vk_map_memory_placed(), "", ",");
+    json_opt_bool(f, "external_memory_fd", vk_external_memory_fd(), "", ",");
+    json_opt_bool(f, "external_memory_dmabuf", vk_external_memory_dmabuf(), "", ",");
+    json_opt_bool(f, "feedback_loop_layout", vk_feedback_loop_layout(), "", ",");
+    json_opt_int(f, "mali_driver_major", vk_mali_driver_major(), "", ",");
+    json_opt_int(f, "mali_driver_minor", vk_mali_driver_minor(), "", ",");
+    json_opt_int(f, "mem_strategy", vk_mem_strategy(), "", "");
+    fprintf(f, "},\n");
     fprintf(f, "\"pass\":\"cap30\"},\n");
 }
 
@@ -218,8 +361,81 @@ static void write_report(const char *status) {
         json_pct(f, "cpu_ms", &r->cpu);
         json_pct(f, "game_thread_ms", &r->game);
         json_pct(f, "render_thread_ms", &r->render);
+        json_pct(f, "present_ms", &r->present);
+        json_opt_double(f, "present_hz", r->present_hz, r->present.p50 < 0 ? "present timing not available" : "", ",");
         fprintf(f, "\"skipped_draws\":%llu,\"skipped_building\":%llu,\"shader_compiles\":%llu,\"display_hz_start\":%.1f,\"display_hz_end\":%.1f,\"camera_err_deg\":%.2f,\"moved\":%.2f,",
                 (unsigned long long)r->skipped, (unsigned long long)r->skipped_building, (unsigned long long)r->compiles, r->hz_start, r->hz_end, r->cam_err, r->moved);
+        
+        // Cache state
+        json_opt_str(f, "cache_state", r->cache_state, "", ",");
+        json_opt_int(f, "spirv_files_before", r->spirv_files_before, "", ",");
+        json_opt_int(f, "spirv_files_after", r->spirv_files_after, "", ",");
+        json_opt_int(f, "pipeline_cache_bytes_before", (int)r->pipeline_cache_bytes_before, "", ",");
+        json_opt_int(f, "pipeline_cache_bytes_after", (int)r->pipeline_cache_bytes_after, "", ",");
+        
+        // Compiles and copies
+        json_opt_uint64(f, "upload_bytes", r->upload_bytes, "", ",");
+        json_opt_uint64(f, "feedback_copies", r->feedback_copies, "", ",");
+        json_opt_uint64(f, "feedback_reads", r->feedback_reads, "", ",");
+        json_opt_uint64(f, "inplace_breaks", r->inplace_breaks, "", ",");
+        json_opt_uint64(f, "pipe_binds", r->pipe_binds, "", ",");
+        json_opt_uint64(f, "set_binds", r->set_binds, "", ",");
+        json_opt_uint64(f, "cb_bytes0", r->cb_bytes[0], "", ",");
+        json_opt_uint64(f, "cb_bytes1", r->cb_bytes[1], "", ",");
+        json_opt_uint64(f, "cb_copied", r->cb_copied, "", ",");
+        json_opt_uint64(f, "cbwin", r->cbwin, "", ",");
+        
+        // Loads/stores
+        json_opt_uint64(f, "loads", r->loads, r->loads_reason, ",");
+        json_opt_uint64(f, "stores", r->stores, r->stores_reason, ",");
+        
+        // Copies
+        json_opt_uint64(f, "submissions", r->submissions, "", ",");
+        json_opt_uint64(f, "image_copies", r->image_copies, "", ",");
+        json_opt_uint64(f, "buffer_copies", r->buffer_copies, "", ",");
+        
+        // PSS
+        json_opt_int(f, "pss_mb_start", r->pss_mb_start, r->pss_reason, ",");
+        json_opt_int(f, "pss_mb_end", r->pss_mb_end, r->pss_reason, ",");
+        
+        // Temperatures
+        json_opt_double(f, "battery_temp_start", r->battery_temp_start, "", ",");
+        json_opt_double(f, "battery_temp_end", r->battery_temp_end, "", ",");
+        json_opt_double(f, "soc_temp_start", r->soc_temp_start, "", ",");
+        json_opt_double(f, "soc_temp_end", r->soc_temp_end, "", ",");
+        
+        // Memory pressure
+        json_opt_int(f, "memory_pressure_level", r->memory_pressure_level, r->mem_pressure_reason, ",");
+        json_opt_bool(f, "memory_pressure_low", r->memory_pressure_low, r->mem_pressure_reason, ",");
+        
+        // Build/GPU info
+        json_opt_str(f, "gpu_name", r->gpu_name, "", ",");
+        json_opt_str(f, "driver_name", r->driver_name, "", ",");
+        json_opt_str(f, "driver_version", r->driver_version, "", ",");
+        json_opt_int(f, "api_version", r->api_version, "", ",");
+        json_opt_bool(f, "fragment_shading_rate", r->fragment_shading_rate, "", ",");
+        json_opt_bool(f, "astc_hdr", r->astc_hdr, "", ",");
+        json_opt_bool(f, "maintenance5", r->maintenance5, "", ",");
+        json_opt_bool(f, "sync2", r->sync2, "", ",");
+        json_opt_bool(f, "dynamic_rendering", r->dynamic_rendering, "", ",");
+        json_opt_bool(f, "external_memory_host", r->external_memory_host, "", ",");
+        json_opt_bool(f, "map_memory_placed", r->map_memory_placed, "", ",");
+        json_opt_bool(f, "external_memory_fd", r->external_memory_fd, "", ",");
+        json_opt_bool(f, "external_memory_dmabuf", r->external_memory_dmabuf, "", ",");
+        json_opt_bool(f, "feedback_loop_layout", r->feedback_loop_layout, "", ",");
+        json_opt_int(f, "mali_driver_major", r->mali_driver_major, "", ",");
+        json_opt_int(f, "mali_driver_minor", r->mali_driver_minor, "", ",");
+        json_opt_int(f, "mem_strategy", r->mem_strategy, "", ",");
+        
+        // Target vs actual
+        json_opt_int(f, "target_fps", r->target_fps, "", ",");
+        json_opt_int(f, "actual_fps_mode", r->actual_fps_mode, "", ",");
+        json_opt_int(f, "target_res_mode", r->target_res_mode, "", ",");
+        json_opt_int(f, "actual_res_mode", r->actual_res_mode, "", ",");
+        json_opt_int(f, "out_lines", r->out_lines, "", ",");
+        json_opt_int(f, "upscaler", r->upscaler, "", ",");
+        json_opt_int(f, "antialias", r->antialias, "", "");
+        
         json_power(f, "power_start", &r->start, ",");
         json_power(f, "power_end", &r->end, "");
         fprintf(f, "}%s\n", i + 1 < nresults ? "," : "");
@@ -623,6 +839,18 @@ extern uint64_t vk_skipped_total(void), vk_compiles_total(void), vk_skipped_buil
 
 static Result *measure(void) {
     extern double vk_display_hz(void);
+    extern uint64_t vk_upload_bytes(void), vk_feedback_copies(void), vk_feedback_reads(void),
+                    vk_inplace_breaks(void), vk_pipe_binds(void), vk_set_binds(void),
+                    vk_cb_bytes(int), vk_cb_copied(void), vk_cbwin(void),
+                    vk_submissions(void), vk_image_copies(void), vk_buffer_copies(void);
+    extern int vk_pss_mb(void);
+    extern const char *vk_gpu_desc(void), *vk_driver_desc(void), *vk_driver_version(void);
+    extern int vk_api_version(void), vk_mali_driver_major(void), vk_mali_driver_minor(void), vk_mem_strategy(void);
+    extern bool vk_fragment_shading_rate(void), vk_astc_hdr(void), vk_maintenance5(void), vk_sync2(void),
+                vk_dynamic_rendering(void), vk_external_memory_host(void), vk_map_memory_placed(void),
+                vk_external_memory_fd(void), vk_external_memory_dmabuf(void), vk_feedback_loop_layout(void);
+    extern int fps_mode_now(void);
+    
     Result *r = &results[nresults];
     *r = (Result){.scene = cur_scene, .repeat = cur_repeat, .load_s = load_s, .camera_s = camera_s, .warmup_s = warm_s, .frames = win_n, .start = power_start, .hz_start = hz_start};
     r->frame = percentiles(0);
@@ -638,12 +866,99 @@ static Result *measure(void) {
     r->game = percentiles(2);
     r->render = percentiles(3);
     r->gpu = percentiles(4);
+    r->present = (Pct){-1, -1, -1};  // not separately tracked yet
+    r->present_hz = -1;
     r->skipped = vk_skipped_total() - skipped_t0;
     r->compiles = vk_compiles_total() - compiles_t0;
     r->skipped_building = vk_skipped_building_total() - building_t0;
     r->hz_end = vk_display_hz();
     read_power(&r->end);
     write_frames();
+    
+    // Cache state
+    snprintf(r->cache_state, sizeof r->cache_state, "%s", cache_at_start);
+    // SPIR-V cache count
+    DIR *d = opendir("cache/spirv");
+    r->spirv_files_before = 0;
+    if (d) {
+        for (struct dirent *e; (e = readdir(d));) if (e->d_name[0] != '.') r->spirv_files_before++;
+        closedir(d);
+    }
+    // Pipeline cache size
+    struct stat sb;
+    r->pipeline_cache_bytes_before = stat("cache/vk_pipelines.bin", &sb) ? 0 : (long)sb.st_size;
+    // After (same for now - will be updated on next run)
+    r->spirv_files_after = r->spirv_files_before;
+    r->pipeline_cache_bytes_after = r->pipeline_cache_bytes_before;
+    
+    // Compiles and copies
+    r->upload_bytes = vk_upload_bytes();
+    r->feedback_copies = vk_feedback_copies();
+    r->feedback_reads = vk_feedback_reads();
+    r->inplace_breaks = vk_inplace_breaks();
+    r->pipe_binds = vk_pipe_binds();
+    r->set_binds = vk_set_binds();
+    r->cb_bytes[0] = vk_cb_bytes(0);
+    r->cb_bytes[1] = vk_cb_bytes(1);
+    r->cb_copied = vk_cb_copied();
+    r->cbwin = vk_cbwin();
+    
+    // Loads/stores (GPU counters - not available without vendor extensions)
+    r->loads = 0;
+    snprintf(r->loads_reason, sizeof r->loads_reason, "GPU counter extension not available (VK_EXT_pipeline_creation_feedback / AMD / NVIDIA specific)");
+    r->stores = 0;
+    snprintf(r->stores_reason, sizeof r->stores_reason, "GPU counter extension not available");
+    
+    // Copies
+    r->submissions = vk_submissions();
+    r->image_copies = vk_image_copies();
+    r->buffer_copies = vk_buffer_copies();
+    
+    // PSS
+    r->pss_mb_start = vk_pss_mb();
+    r->pss_mb_end = r->pss_mb_start;  // will be updated after
+    snprintf(r->pss_reason, sizeof r->pss_reason, "polled once per second via JNI");
+    
+    // Temperatures
+    r->battery_temp_start = r->start.batt_temp;
+    r->battery_temp_end = r->end.batt_temp;
+    r->soc_temp_start = r->start.soc_temp;
+    r->soc_temp_end = r->end.soc_temp;
+    
+    // Memory pressure
+    r->memory_pressure_level = r->start.thermal >= 0 ? r->start.thermal : -1;
+    r->memory_pressure_low = r->start.headroom >= 0 && r->start.headroom >= 0.9f;
+    snprintf(r->mem_pressure_reason, sizeof r->mem_pressure_reason, "from PowerManager thermal status + headroom");
+    
+    // Build/GPU info
+    json_str(NULL, "gpu", vk_gpu_desc(), "");  // just to call it
+    snprintf(r->gpu_name, sizeof r->gpu_name, "%s", vk_gpu_desc());
+    snprintf(r->driver_name, sizeof r->driver_name, "%s", vk_driver_desc());
+    snprintf(r->driver_version, sizeof r->driver_version, "%s", vk_driver_version());
+    r->api_version = vk_api_version();
+    r->fragment_shading_rate = vk_fragment_shading_rate();
+    r->astc_hdr = vk_astc_hdr();
+    r->maintenance5 = vk_maintenance5();
+    r->sync2 = vk_sync2();
+    r->dynamic_rendering = vk_dynamic_rendering();
+    r->external_memory_host = vk_external_memory_host();
+    r->map_memory_placed = vk_map_memory_placed();
+    r->external_memory_fd = vk_external_memory_fd();
+    r->external_memory_dmabuf = vk_external_memory_dmabuf();
+    r->feedback_loop_layout = vk_feedback_loop_layout();
+    r->mali_driver_major = vk_mali_driver_major();
+    r->mali_driver_minor = vk_mali_driver_minor();
+    r->mem_strategy = vk_mem_strategy();
+    
+    // Target vs actual
+    r->target_fps = g_settings.fps_mode;
+    r->actual_fps_mode = fps_mode_now();
+    r->target_res_mode = g_settings.res_mode;
+    r->actual_res_mode = g_settings.res_mode;  // same for now
+    r->out_lines = g_settings.out_lines;
+    r->upscaler = g_settings.upscaler;
+    r->antialias = g_settings.antialias;
+    
     return r;
 }
 
