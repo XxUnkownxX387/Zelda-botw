@@ -82,7 +82,8 @@ static void test_bc4_r8() {
     check(out[0] == 0x80, "BC4 UNORM decodes correctly");
     
     bcdec_bc4(bc, out, pitch, 1); // SNORM
-    check(out[0] == 0x80, "BC4 SNORM decodes correctly");
+    // Endpoints are signed int8 (-128 clamps to -127): all-0x80 -> -127 -> byte 0x81
+    check(out[0] == 0x81, "BC4 SNORM decodes correctly");
     
     // Test non-multiple-of-4 sizes
     int widths[] = {1, 2, 3, 5, 7, 8, 10};
@@ -112,7 +113,8 @@ static void test_bc5_rg8() {
     check(out[0] == 0x80 && out[1] == 0x80, "BC5 UNORM decodes correctly");
     
     bcdec_bc5(bc, out, pitch, 1); // SNORM
-    check(out[0] == 0x80 && out[1] == 0x80, "BC5 SNORM decodes correctly");
+    // Signed endpoints (-128 -> -127): both channels texel -127 -> byte 0x81
+    check(out[0] == 0x81 && out[1] == 0x81, "BC5 SNORM decodes correctly");
     
     // Test non-multiple-of-4 sizes
     int widths[] = {1, 2, 3, 5, 7, 8, 10};
