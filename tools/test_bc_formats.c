@@ -132,6 +132,9 @@ static void test_bc5_rg8() {
 
 static void test_bc3_mip_levels() {
     // Test BC3 with non-multiple-of-4 mip levels
+    // The decoder always writes a full 4x4 block (16 pixels = 64 bytes for RGBA8),
+    // so the output buffer must be at least 4 * pitch = 4 * (w * 4) = 16*w bytes.
+    // We allocate 64 bytes (max for any 4x4 block) to be safe.
     int mip_sizes[][2] = {
         {64, 64}, {32, 32}, {16, 16}, {8, 8}, {4, 4}, {2, 2}, {1, 1},
         {63, 63}, {31, 31}, {15, 15}, {7, 7}, {3, 3}
@@ -145,7 +148,9 @@ static void test_bc3_mip_levels() {
         uint8_t *bc = malloc(wb * hb * 16);
         memset(bc, i * 17, wb * hb * 16); // Different pattern per mip
         int pitch = w * 4;
-        uint8_t *out = malloc(w * h * 4);
+        // Allocate at least 4 rows * pitch = 4 * w * 4 = 16*w bytes.
+        // Minimum 64 bytes for a full 4x4 RGBA8 block.
+        uint8_t *out = malloc(64);
         bcdec_bc3(bc, out, pitch);
         free(bc);
         free(out);
