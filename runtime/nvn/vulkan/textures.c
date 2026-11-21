@@ -869,6 +869,22 @@ static uint64_t bc_upload_blocks(VkCommandBuffer cb, TexBackend *b, const uint8_
     uint64_t out_size = bpp ? (uint64_t)wb * 4 * hb * 4 * bpp : (uint64_t)wb * hb * 16;
     VkSpan s = vk_transient(out_size, 16);
     uint64_t decode_start = decode_ns ? SDL_GetTicksNS() : 0;
+
+    // Log BC format path per texture type (proves A/B compares different paths)
+    static uint64_t bc1_astc_count = 0, bc1_rgba8_count = 0, bc3_rgba8_count = 0;
+    bool is_bc1 = (b->bc_vf == VK_FORMAT_BC1_RGB_UNORM_BLOCK || b->bc_vf == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ||
+                   b->bc_vf == VK_FORMAT_BC1_RGB_SRGB_BLOCK || b->bc_vf == VK_FORMAT_BC1_RGBA_SRGB_BLOCK);
+    bool is_bc3 = (b->bc_vf == VK_FORMAT_BC3_UNORM_BLOCK || b->bc_vf == VK_FORMAT_BC3_SRGB_BLOCK);
+    if (is_bc1) {
+        if (bpp == 0) { bc1_astc_count++; if (bc1_astc_count == 1 || bc1_astc_count % 50 == 0)
+            LOG("[vk] BC1->ASTC path active: %" PRIu64 " textures converted\n", bc1_astc_count); }
+        else { bc1_rgba8_count++; if (bc1_rgba8_count == 1 || bc1_rgba8_count % 50 == 0)
+            LOG("[vk] BC1->RGBA8 fallback: %" PRIu64 " textures converted\n", bc1_rgba8_count); }
+    } else if (is_bc3) {
+        bc3_rgba8_count++; if (bc3_rgba8_count == 1 || bc3_rgba8_count % 50 == 0)
+            LOG("[vk] BC3->RGBA8 decode: %" PRIu64 " textures converted\n", bc3_rgba8_count);
+    }
+
     if (bpp) bc_decode(b->bc_vf, blocks, wb, hb, bsize, s.ptr, bpp);
     else bc1_to_astc(blocks, s.ptr, (uint64_t)wb * hb);
     if (decode_ns) *decode_ns = SDL_GetTicksNS() - decode_start;

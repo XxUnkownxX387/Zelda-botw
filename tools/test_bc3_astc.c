@@ -100,7 +100,10 @@ int main(int argc, char **argv) {
         for (int s = 0; s < 2; s++) {
             printf("%-24s %s: %ld blocks, largest colour difference %d, alpha mismatch on %d texels (ASTC flat=255 vs BC3 per-texel)\n", kind[m],
                    s ? "sRGB" : "LDR ", count[m], worst[s][m], alpha_bad[s][m]);
-            if (worst[s][m] > 3) fail = 1;  // alpha mismatch expected, only fail on colour diff > 3
+            if (worst[s][m] > 3) fail = 1;
+            // Fail if alpha mismatch exceeds tolerance (2 texels per block * 3333 blocks ≈ 6666 total)
+            // Each mode has ~3333 blocks * 16 texels = 53328 texels. Tolerance: 2 per block average.
+            if (alpha_bad[s][m] > count[m] * 2) fail = 1;
         }
     printf("%s (%d illegal blocks)\n", fail ? "FAIL" : "PASS", illegal);
     return fail;
