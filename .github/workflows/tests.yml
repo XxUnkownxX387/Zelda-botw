@@ -23,9 +23,11 @@ jobs:
       - name: Run hot/cold gamebuild tests (tools/test_gamebuild_hot.py)
         run: python3 tools/test_gamebuild_hot.py
 
-      - name: Run BC format tests (tools/test_bc_formats.c, tools/test_bc1_astc.c)
+      - name: Run BC format tests (tools/test_bc_formats.c, tools/test_bc1_astc.c, tools/test_bc3_astc.c)
         run: |
           cc -O2 -I runtime/nvn tools/test_bc_formats.c -o build/test_bc_formats
           ./build/test_bc_formats
           cc -O2 -I runtime/nvn tools/test_bc1_astc.c runtime/nvn/bc1_astc.c runtime/nvn/astc.c -o build/test_bc1_astc
           ./build/test_bc1_astc 10000
+          cc -O2 -I runtime/nvn tools/test_bc3_astc.c runtime/nvn/bc1_astc.c runtime/nvn/astc.c -o build/test_bc3_astc
+          ./build/test_bc3_astc 10000
