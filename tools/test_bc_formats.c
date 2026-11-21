@@ -148,9 +148,10 @@ static void test_bc3_mip_levels() {
         uint8_t *bc = malloc(wb * hb * 16);
         memset(bc, i * 17, wb * hb * 16); // Different pattern per mip
         int pitch = w * 4;
-        // Allocate at least 4 rows * pitch = 4 * w * 4 = 16*w bytes.
-        // Minimum 64 bytes for a full 4x4 RGBA8 block.
-        uint8_t *out = malloc(64);
+        // One 4x4 block: four rows of `row_bytes` bytes each (BC3 -> RGBA8: 64 bytes per compact block, 16 bytes per texel-row),
+        // spaced by destinationPitch - so the destination must span 4 * row_bytes.
+        size_t row_bytes = (size_t)pitch > 16 ? (size_t)pitch : 16;
+        uint8_t *out = malloc(4 * row_bytes);
         bcdec_bc3(bc, out, pitch);
         free(bc);
         free(out);
