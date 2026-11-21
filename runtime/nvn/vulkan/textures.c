@@ -722,11 +722,15 @@ static void create_image(NvnTexture *t, TexBackend *b) {
             static bool told;
             if (!told) { told = true; LOG("[vk] no BC textures on this GPU: decoded on the CPU at upload\n"); }
             b->bc_vf = vf;
-            // Check BC3 opacity if BC3 and BC3 ASTC enabled
-            if (bc3_astc() && (vf == VK_FORMAT_BC3_UNORM_BLOCK || vf == VK_FORMAT_BC3_SRGB_BLOCK)) {
+            // Check BC3 opacity if BC3 and BC3 ASTC enabled.
+            // Only for non-dynamic textures (flag 0x10 = linear/dynamic): dynamic content can change opacity.
+            if (bc3_astc() && (vf == VK_FORMAT_BC3_UNORM_BLOCK || vf == VK_FORMAT_BC3_SRGB_BLOCK) &&
+                !(t->flags & 0x10)) {
                 b->bc3_astc_ok = bc3_is_opaque(t);
                 if (b->bc3_astc_ok) LOG("[vk] BC3 texture verified opaque -> ASTC 4x4\n");
                 else LOG("[vk] BC3 texture has non-opaque texels -> RGBA8 fallback\n");
+            } else if (bc3_astc() && (vf == VK_FORMAT_BC3_UNORM_BLOCK || vf == VK_FORMAT_BC3_SRGB_BLOCK) && (t->flags & 0x10)) {
+                LOG("[vk] BC3 dynamic texture (flag 0x10) -> RGBA8 fallback (opacity can change)\n");
             }
             vf = bc_target(b, vf, &bpp);
         } else
@@ -1164,12 +1168,12 @@ static uint8_t *texture_scratch(size_t size) {
 
 // Check if a BC3 texture is fully opaque (all alpha = 255 in all blocks, all mip levels).
 // Returns true if opaque, false if any non-opaque texel found.
+// Early-exits at first non-opaque block.
 static bool bc3_is_opaque(const NvnTexture *t) {
     const FormatInfo *fi = t->layout.fmt;
     if (!fi || fi->bpb != 16) return false;  // not BC3
     bool linear = (t->flags & 0x50) != 0;
     uint32_t levels = t->levels ? t->levels : 1;
-    uint8_t ref[64];
     for (uint32_t lv = 0; lv < levels; lv++) {
         LevelLayout l = tegra_level(&t->layout, lv);
         uint64_t layer_size = tegra_layer_size(&t->layout);
@@ -1186,10 +1190,7 @@ static bool bc3_is_opaque(const NvnTexture *t) {
             for (uint32_t y = 0; y < l.hb; y++) {
                 for (uint32_t x = 0; x < l.wb; x++) {
                     const uint8_t *blk = blocks + ((uint64_t)y * l.wb + x) * 16;
-                    bcdec_bc3(blk, ref, 16);
-                    for (int t2 = 0; t2 < 16; t2++) {
-                        if (ref[4 * t2 + 3] != 255) return false;
-                    }
+                    if (!bc3_block_is_opaque(blk)) return false;  // early exit
                 }
             }
         }

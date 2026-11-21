@@ -19,16 +19,7 @@
 #define BCDEC_IMPLEMENTATION
 #include "../runtime/nvn/bcdec.h"
 
-// Opacity check: decode all 16 alpha values per block via bcdec, verify all == 255.
-// Mirrors runtime/nvn/vulkan/textures.c:bc3_is_opaque()
-static bool bc3_is_opaque_block(const uint8_t bc[16]) {
-    uint8_t ref[64];
-    bcdec_bc3(bc, ref, 16);
-    for (int t = 0; t < 16; t++) {
-        if (ref[4 * t + 3] != 255) return false;
-    }
-    return true;
-}
+
 
 static uint64_t g_rng = 1;
 static uint64_t rnd(void) {  // splitmix64
@@ -133,8 +124,8 @@ int main(int argc, char **argv) {
             bc[12] = (uint8_t)idx; bc[13] = (uint8_t)(idx >> 8);
             bc[14] = (uint8_t)(idx >> 16); bc[15] = (uint8_t)(idx >> 24);
         }
-        // Opacity detection
-        bool is_opaque = bc3_is_opaque_block(bc);
+        // Opacity detection (uses shared function from bcdec.h)
+        bool is_opaque = bc3_block_is_opaque(bc);
         if (m == 0) { if (is_opaque) opaque_detected++; else printf("FAIL: opaque block not detected as opaque\n"); }
         if (m == 4) { if (!is_opaque) nonopaque_detected++; else printf("FAIL: non-opaque block detected as opaque\n"); }
         bcdec_bc3(bc, ref, 16);

@@ -105,6 +105,20 @@
 BCDECDEF void bcdec_bc1(const void* compressedBlock, void* decompressedBlock, int destinationPitch);
 BCDECDEF void bcdec_bc2(const void* compressedBlock, void* decompressedBlock, int destinationPitch);
 BCDECDEF void bcdec_bc3(const void* compressedBlock, void* decompressedBlock, int destinationPitch);
+
+// Check if a single BC3 block is fully opaque (all 16 alpha values == 255).
+// Returns 1 if opaque, 0 otherwise. Uses bcdec internally.
+static inline int bc3_block_is_opaque(const void* compressedBlock) {
+    unsigned char ref[64];
+    bcdec_bc3(compressedBlock, ref, 16);
+    for (int t = 0; t < 16; t++) {
+        if (ref[4 * t + 3] != 255) return 0;
+    }
+    return 1;
+}
+
+#endif /* BCDEC_HEADER_INCLUDED */
+
 #ifndef BCDEC_BC4BC5_PRECISE
 BCDECDEF void bcdec_bc4(const void* compressedBlock, void* decompressedBlock, int destinationPitch);
 BCDECDEF void bcdec_bc5(const void* compressedBlock, void* decompressedBlock, int destinationPitch);
@@ -117,8 +131,6 @@ BCDECDEF void bcdec_bc5_float(const void* compressedBlock, void* decompressedBlo
 BCDECDEF void bcdec_bc6h_float(const void* compressedBlock, void* decompressedBlock, int destinationPitch, int isSigned);
 BCDECDEF void bcdec_bc6h_half(const void* compressedBlock, void* decompressedBlock, int destinationPitch, int isSigned);
 BCDECDEF void bcdec_bc7(const void* compressedBlock, void* decompressedBlock, int destinationPitch);
-
-#endif /* BCDEC_HEADER_INCLUDED */
 
 #ifdef BCDEC_IMPLEMENTATION
 
