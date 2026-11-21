@@ -31,3 +31,12 @@ jobs:
           ./build/test_bc1_astc 10000
           cc -O2 -I runtime/nvn tools/test_bc3_astc.c runtime/nvn/bc1_astc.c runtime/nvn/astc.c -o build/test_bc3_astc
           ./build/test_bc3_astc 10000
+
+      - name: Run BC format tests (unsigned char, ARM64 simulation)
+        run: |
+          cc -O2 -funsigned-char -I runtime/nvn tools/test_bc_formats.c -o build/test_bc_formats_uc
+          ./build/test_bc_formats_uc
+          cc -O2 -funsigned-char -I runtime/nvn tools/test_bc1_astc.c runtime/nvn/bc1_astc.c runtime/nvn/astc.c -o build/test_bc1_astc_uc
+          ./build/test_bc1_astc_uc 10000
+          cc -O2 -funsigned-char -I runtime/nvn tools/test_bc3_astc.c runtime/nvn/bc1_astc.c runtime/nvn/astc.c -o build/test_bc3_astc_uc
+          ./build/test_bc3_astc_uc 10000
