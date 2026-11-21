@@ -410,8 +410,24 @@ static bool bc1_astc(void) {
     return ok;
 }
 
+// BC3 -> ASTC 4x4 for fully opaque textures (alpha=255 everywhere). LARECOMP_BC3_ASTC=0: RGBA8 as before.
+// Opaque check: decode all 16 alpha values per block via bcdec, verify all == 255.
+static bool bc3_astc(void) {
+    static int ok = -1;
+    if (ok < 0) {
+        const char *e = getenv("LARECOMP_BC3_ASTC");
+        VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+        ok = (!e || atoi(e)) && format_supports(VK_FORMAT_ASTC_4x4_UNORM_BLOCK, need) &&
+             format_supports(VK_FORMAT_ASTC_4x4_SRGB_BLOCK, need);
+        if (ok) LOG("[vk] BC3 opaque textures as ASTC 4x4\n");
+    }
+    return ok;
+}
+
+static bool bc3_is_opaque(const NvnTexture *t);  // forward declaration (defined after texture_scratch)
+
 // The format a BC texture is decoded into without BC; *bpp: its bytes per texel (0: ASTC 4x4 blocks - bc1_to_astc)
-static VkFormat bc_target(VkFormat bc, uint32_t *bpp) {
+static VkFormat bc_target(const TexBackend *b, VkFormat bc, uint32_t *bpp) {
     switch (bc) {
     case VK_FORMAT_BC1_RGB_UNORM_BLOCK: case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
         if (bc1_astc()) { *bpp = 0; return VK_FORMAT_ASTC_4x4_UNORM_BLOCK; }
@@ -425,7 +441,13 @@ static VkFormat bc_target(VkFormat bc, uint32_t *bpp) {
     case VK_FORMAT_BC5_SNORM_BLOCK: *bpp = 2; return VK_FORMAT_R8G8_SNORM;
     case VK_FORMAT_BC6H_UFLOAT_BLOCK: case VK_FORMAT_BC6H_SFLOAT_BLOCK: *bpp = 8; return VK_FORMAT_R16G16B16A16_SFLOAT;
     case VK_FORMAT_BC2_SRGB_BLOCK:
-    case VK_FORMAT_BC3_SRGB_BLOCK: case VK_FORMAT_BC7_SRGB_BLOCK: *bpp = 4; return VK_FORMAT_R8G8B8A8_SRGB;
+    case VK_FORMAT_BC3_SRGB_BLOCK:
+        if (b && b->bc3_astc_ok) { *bpp = 0; return VK_FORMAT_ASTC_4x4_SRGB_BLOCK; }
+        *bpp = 4; return VK_FORMAT_R8G8B8A8_SRGB;
+    case VK_FORMAT_BC3_UNORM_BLOCK:
+        if (b && b->bc3_astc_ok) { *bpp = 0; return VK_FORMAT_ASTC_4x4_UNORM_BLOCK; }
+        *bpp = 4; return VK_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_BC7_SRGB_BLOCK: *bpp = 4; return VK_FORMAT_R8G8B8A8_SRGB;
     default: *bpp = 4; return VK_FORMAT_R8G8B8A8_UNORM;
     }
 }
@@ -696,11 +718,17 @@ static void create_image(NvnTexture *t, TexBackend *b) {
 #ifdef __ANDROID__
         uint32_t bpp;
         if (is_bc(vf) && fi && (fi->bpb == 8 || fi->bpb == 16) && fi->bw == 4 && fi->bh == 4 &&
-            format_supports(bc_target(vf, &bpp), need)) {
+            format_supports(bc_target(b, vf, &bpp), need)) {
             static bool told;
             if (!told) { told = true; LOG("[vk] no BC textures on this GPU: decoded on the CPU at upload\n"); }
             b->bc_vf = vf;
-            vf = bc_target(vf, &bpp);
+            // Check BC3 opacity if BC3 and BC3 ASTC enabled
+            if (bc3_astc() && (vf == VK_FORMAT_BC3_UNORM_BLOCK || vf == VK_FORMAT_BC3_SRGB_BLOCK)) {
+                b->bc3_astc_ok = bc3_is_opaque(t);
+                if (b->bc3_astc_ok) LOG("[vk] BC3 texture verified opaque -> ASTC 4x4\n");
+                else LOG("[vk] BC3 texture has non-opaque texels -> RGBA8 fallback\n");
+            }
+            vf = bc_target(b, vf, &bpp);
         } else
 #endif
         if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
@@ -865,13 +893,13 @@ static void bc_shadow_destroy(TexBackend *b);
 static uint64_t bc_upload_blocks(VkCommandBuffer cb, TexBackend *b, const uint8_t *blocks, uint32_t wb, uint32_t hb,
                                  uint32_t bsize, uint32_t lv, uint32_t layer, uint32_t z, uint64_t *decode_ns) {
     uint32_t bpp;
-    bc_target(b->bc_vf, &bpp);
+    bc_target(b, b->bc_vf, &bpp);
     uint64_t out_size = bpp ? (uint64_t)wb * 4 * hb * 4 * bpp : (uint64_t)wb * hb * 16;
     VkSpan s = vk_transient(out_size, 16);
     uint64_t decode_start = decode_ns ? SDL_GetTicksNS() : 0;
 
     // Log BC format path per texture type (proves A/B compares different paths)
-    static uint64_t bc1_astc_count = 0, bc1_rgba8_count = 0, bc3_rgba8_count = 0;
+    static uint64_t bc1_astc_count = 0, bc1_rgba8_count = 0, bc3_astc_count = 0, bc3_rgba8_count = 0;
     bool is_bc1 = (b->bc_vf == VK_FORMAT_BC1_RGB_UNORM_BLOCK || b->bc_vf == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ||
                    b->bc_vf == VK_FORMAT_BC1_RGB_SRGB_BLOCK || b->bc_vf == VK_FORMAT_BC1_RGBA_SRGB_BLOCK);
     bool is_bc3 = (b->bc_vf == VK_FORMAT_BC3_UNORM_BLOCK || b->bc_vf == VK_FORMAT_BC3_SRGB_BLOCK);
@@ -881,8 +909,10 @@ static uint64_t bc_upload_blocks(VkCommandBuffer cb, TexBackend *b, const uint8_
         else { bc1_rgba8_count++; if (bc1_rgba8_count == 1 || bc1_rgba8_count % 50 == 0)
             LOG("[vk] BC1->RGBA8 fallback: %" PRIu64 " textures converted\n", bc1_rgba8_count); }
     } else if (is_bc3) {
-        bc3_rgba8_count++; if (bc3_rgba8_count == 1 || bc3_rgba8_count % 50 == 0)
-            LOG("[vk] BC3->RGBA8 decode: %" PRIu64 " textures converted\n", bc3_rgba8_count);
+        if (bpp == 0) { bc3_astc_count++; if (bc3_astc_count == 1 || bc3_astc_count % 50 == 0)
+            LOG("[vk] BC3->ASTC path active: %" PRIu64 " textures converted\n", bc3_astc_count); }
+        else { bc3_rgba8_count++; if (bc3_rgba8_count == 1 || bc3_rgba8_count % 50 == 0)
+            LOG("[vk] BC3->RGBA8 fallback: %" PRIu64 " textures converted\n", bc3_rgba8_count); }
     }
 
     if (bpp) bc_decode(b->bc_vf, blocks, wb, hb, bsize, s.ptr, bpp);
@@ -1130,6 +1160,41 @@ static uint8_t *texture_scratch(size_t size) {
         upload_scratch_size = size;
     }
     return upload_scratch;
+}
+
+// Check if a BC3 texture is fully opaque (all alpha = 255 in all blocks, all mip levels).
+// Returns true if opaque, false if any non-opaque texel found.
+static bool bc3_is_opaque(const NvnTexture *t) {
+    const FormatInfo *fi = t->layout.fmt;
+    if (!fi || fi->bpb != 16) return false;  // not BC3
+    bool linear = (t->flags & 0x50) != 0;
+    uint32_t levels = t->levels ? t->levels : 1;
+    uint8_t ref[64];
+    for (uint32_t lv = 0; lv < levels; lv++) {
+        LevelLayout l = tegra_level(&t->layout, lv);
+        uint64_t layer_size = tegra_layer_size(&t->layout);
+        for (uint32_t layer = 0; layer < (t->depth ? t->depth : 1); layer++) {
+            const uint8_t *src = (const uint8_t *)(uintptr_t)t->addr + layer * layer_size + l.offset;
+            uint8_t *blocks = texture_scratch((uint64_t)l.wb * l.hb * 16);
+            uint64_t stride = (t->flags & 0x10) ? t->stride : (uint64_t)(l.wb * 16);
+            if (linear) {
+                for (uint32_t y = 0; y < l.hb; y++)
+                    memcpy(blocks + (uint64_t)y * l.wb * 16, src + (uint64_t)y * stride, l.wb * 16);
+            } else {
+                tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
+            }
+            for (uint32_t y = 0; y < l.hb; y++) {
+                for (uint32_t x = 0; x < l.wb; x++) {
+                    const uint8_t *blk = blocks + ((uint64_t)y * l.wb + x) * 16;
+                    bcdec_bc3(blk, ref, 16);
+                    for (int t2 = 0; t2 < 16; t2++) {
+                        if (ref[4 * t2 + 3] != 255) return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
 }
 
 // Exact comparisons replace repeated hashing for stable dynamic textures without relying on page tracking.
@@ -1542,7 +1607,7 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
         VkFormat vf = fmt_of(v->format).vf;
         if (vk_format(t->format) == b->format) fmt = vf;  // (fallback images keep their own format)
 #ifdef __ANDROID__
-        else if (b->bc_vf && is_bc(vf)) { uint32_t bpp; fmt = bc_target(vf, &bpp); }  // (decoded BC: its sRGB / UNORM view)
+        else if (b->bc_vf && is_bc(vf)) { uint32_t bpp; fmt = bc_target(b, vf, &bpp); }  // (decoded BC: its sRGB / UNORM view)
 #endif
         if (b->fixed_fmt && fmt != b->format && fmt != b->view_alt) {  // (not in its format list: create_image)
             static int nlog;
