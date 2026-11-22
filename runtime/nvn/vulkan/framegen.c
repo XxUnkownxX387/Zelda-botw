@@ -14,7 +14,9 @@
 #include "../rt.h"
 
 extern bool framepace_in_event(void);  // (hle/framepace.c: the cutscenes, the talks, the item fanfares)
+#ifndef LARECOMP_NO_FFMPEG
 extern volatile int g_movie_playing;  // (runtime/hle/movie.c: video decoders running)
+#endif
 
 // Framegen resources
 static VkPipelineLayout fg_pipeline_layout;
@@ -93,12 +95,19 @@ bool framegen_generate(void) {
     // actually moving in the world, and not in a menu, a movie, an event or a pause)
     static int logged = -1;
     if (logged < 0) {
+#ifndef LARECOMP_NO_FFMPEG
         LOG("[framegen] framegen_generate: enabled=%d, framepace_doubled=%d, movie=%d, menu=%d, event=%d, title=%d, pace_on=%d\n",
             framegen_enabled(), framepace_gen_doubled(), g_movie_playing > 0, framepace_in_menu(), framepace_in_event(), framepace_on_title(), framepace_on());
+#else
+        LOG("[framegen] framegen_generate: enabled=%d, framepace_doubled=%d, movie=0, menu=%d, event=%d, title=%d, pace_on=%d\n",
+            framegen_enabled(), framepace_gen_doubled(), framepace_in_menu(), framepace_in_event(), framepace_on_title(), framepace_on());
+#endif
         logged = 1;
     }
     if (!framegen_enabled()) return false;
+#ifndef LARECOMP_NO_FFMPEG
     if (g_movie_playing > 0) return false;  // (a movie: the generated frames aren't its)
+#endif
     if (framepace_in_menu()) return false;
     if (framepace_in_event()) return false;
     if (framepace_on_title()) return false;

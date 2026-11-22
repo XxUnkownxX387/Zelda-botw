@@ -114,7 +114,7 @@ static bool pass_stored;  // (the pass being recorded stored to a target / gmem 
 static const void *g_cur_rec;   // (exec_list: the record being run)
 static struct { const void *rec; uint32_t aspects; } lclear[16];  // (clears the pass's load operations did: begin_pass)
 static int nlclear;
-static int naliases;
+int naliases;   // (exec.c owns the copy aliases: textures.c vram_can_evict reads them)
 
 uint64_t vk_completed_seq(void) {
     uint64_t v = 0;
@@ -3512,10 +3512,16 @@ static void warmup_process(void) {
     extern bool framepace_on(void);
     extern bool framepace_in_menu(void);
     extern bool framepace_in_event(void);
+#ifndef LARECOMP_NO_FFMPEG
     extern volatile int g_movie_playing;
+#endif
     extern bool framepace_on_title(void);
     
+#ifndef LARECOMP_NO_FFMPEG
     bool loading_or_title = !framepace_on() || framepace_in_menu() || framepace_in_event() || g_movie_playing > 0 || framepace_on_title();
+#else
+    bool loading_or_title = !framepace_on() || framepace_in_menu() || framepace_in_event() || framepace_on_title();
+#endif
     if (!loading_or_title) return;
     
     pthread_mutex_lock(&warmup_lock);
@@ -3992,7 +3998,7 @@ static void ct_draw(Prog *pr, const char *what) {
 // LARECOMP_VK_COPY_OPT=0: always copy (the old behaviour).
 typedef struct { NvnTexture *src, *dst; VkImage simg, dimg; } CopyAlias;
 extern uint32_t vk_view_gen;
-static CopyAlias aliases[8];
+CopyAlias aliases[8];   // (exec.c owns the copy aliases: textures.c vram_can_evict reads them)
 static uint64_t stat_alias_made, stat_alias_renamed, stat_alias_partial, stat_alias_copied;
 
 static int copy_opt(void) {

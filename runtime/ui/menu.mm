@@ -516,6 +516,7 @@ extern "C" double output_scale_thermal_dynamic_factor(void);
 extern "C" bool vk_mali_detected(void);  // (runtime/nvn/vulkan/device.c: Mali, the ARM Mali GPUs - vendorID 0x13B5)
 extern "C" const char *rt_data_root(void);  // runtime/paths.c
 extern "C" void plat_sustained_perf_mode(bool on);  // runtime/platform/android.c
+extern "C" void vk_pipeline_cache_clear(void);  // (runtime/nvn/vulkan/device.c: atomic clear of the in-memory + file pipeline cache)
 
 static void tab_display(void) {
     float scale = ImGui::GetFontSize() / 34;
@@ -833,7 +834,6 @@ static void tab_display(void) {
         settings_save();
     }
     if (opt_button(tr("Clear Shader Cache"), tr("Deletes <data root>/pipeline_cache.bin. The cache will be rebuilt on the next game start. Not cancelled by in-memory save."))) {
-        extern void vk_pipeline_cache_clear(void);
         vk_pipeline_cache_clear();
     }
 #endif

@@ -741,7 +741,8 @@ void plat_terminate(void) { _exit(0); }
 // NaN headroom from Java is converted to -1 (unknown). Preemption handled by atomic update.
 static pthread_mutex_t g_ds_lock = PTHREAD_MUTEX_INITIALIZER;
 static PlatDeviceStats g_ds = {.batt_temp_c = -1, .batt_pct = -1, .thermal = -1, .headroom = -1, .plugged = -1};
-static int g_android_pss_mb = -1;  // PSS from nativeMemoryPressure callback
+int g_android_pss_mb = -1;  // PSS from nativeMemoryPressure callback
+int g_android_api_level = 0;  // the Android API level (menu.mm: ADPF availability: 33+)
 
 // Cached headroom for framepace when JNI calls are less frequent than headroom updates
 static float g_cached_headroom = -1;
@@ -1090,6 +1091,7 @@ static void adpf_work_locked(int slot, uint64_t work_ns, uint64_t target_ns, uin
         if (__system_property_get("ro.build.version.sdk", api_prop) > 0) {
             api_level = atoi(api_prop);
         }
+        g_android_api_level = api_level;   // (menu.mm: ADPF availability: on for API 33+)
         if (adpf_setting == 0 || (adpf_setting == -1 && api_level < 33)) {
             loaded = -2;
             return;
