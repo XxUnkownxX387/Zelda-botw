@@ -1,0 +1,22 @@
+format = 1
+repeats = 2
+warmup_s = 15
+calm_s = 15
+warmup_max_s = 120
+window_s = 30
+
+[scene]
+name = plateau
+pos = -1038 251 1815
+time = 180
+weather = 0
+yaw = 0
+pitch = 0
+
+[scene]
+name = hateno-village
+pos = 3382 243 2209
+time = 180
+weather = 0
+yaw = -60
+pitch = 0
