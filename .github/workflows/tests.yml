@@ -61,13 +61,17 @@ jobs:
       - name: Install Android SDK components
         run: |
           export ANDROID_HOME=/usr/local/lib/android
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build patch unzip
+          curl -sSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdline-tools.zip -d /tmp
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          mv /tmp/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME --licenses > /dev/null 2>&1 || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME \
             "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;30.0.16248370" \
             "cmake;3.30.4"
-          sudo apt-get update && sudo apt-get install -y cmake ninja-build patch
 
       - name: Build native dependencies (android/deps/build_deps.sh)
         run: ./android/deps/build_deps.sh
