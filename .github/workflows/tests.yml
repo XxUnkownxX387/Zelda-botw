@@ -59,8 +59,9 @@ jobs:
         run: |
           if [ ! -d third_party/libadrenotools ]; then
             git clone --depth 1 https://github.com/bylaws/libadrenotools third_party/libadrenotools
+            git -C third_party/libadrenotools submodule update --init --recursive
           fi
-          ls third_party/libadrenotools | head
+          ls third_party/libadrenotools/lib/linkernsbypass
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
