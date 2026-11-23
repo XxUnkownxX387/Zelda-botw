@@ -45,6 +45,10 @@ static int g_vram_budget_lowmem_armed = 0;
 static NvnTexture **g_live;
 static int g_nlive, g_cap_live;
 
+// Re-upload counters (distinguish eviction vs guest rewrite)
+static uint64_t reupload_after_eviction = 0;
+static uint64_t reupload_guest_rewrite = 0;
+
 // Forward declarations
 extern uint64_t renderer_present_count(void);
 extern void backend_texture_destroyed(NvnTexture *t);
@@ -216,6 +220,8 @@ static void vram_budget_maybe_evict(uint64_t current_frame) {
             (unsigned long long)(victim_backend ? victim_backend->mem_size >> 20 : 0),
             victim->refs, victim_backend ? victim_backend->rs_group : 255,
             victim_backend ? victim_backend->gpu_owned : 0);
+        
+        if (victim_backend) victim_backend->evicted = true;
         
         g_evicted_this_frame++;
         backend_texture_destroyed(victim);
@@ -1042,10 +1048,22 @@ static TexBackend *tex_backend(NvnTexture *t) {
     create_image(t, b);
     t->backend = b;
     live_add(t, b);
-    static uint64_t reupload_count = 0;
-    reupload_count++;
-    LOG("[vk] VRAM: texture %p re-uploaded from guest memory (addr %llx, %llu MB) [count=%llu]\n", (void *)t, (unsigned long long)t->addr,
-        (unsigned long long)(b->mem_size >> 20), (unsigned long long)reupload_count);
+
+    // Distinguish re-upload after eviction vs guest rewrite
+    static uint64_t reupload_after_eviction = 0;
+    static uint64_t reupload_guest_rewrite = 0;
+    if (b->evicted) {
+        reupload_after_eviction++;
+        b->evicted = false;  // clear flag after counting
+        LOG("[vk] VRAM: texture %p re-uploaded after eviction (addr %llx, %llu MB) [evicted=%llu]\n",
+            (void *)t, (unsigned long long)t->addr, (unsigned long long)(b->mem_size >> 20),
+            (unsigned long long)reupload_after_eviction);
+    } else {
+        reupload_guest_rewrite++;
+        LOG("[vk] VRAM: texture %p re-uploaded guest rewrite (addr %llx, %llu MB) [rewrite=%llu]\n",
+            (void *)t, (unsigned long long)t->addr, (unsigned long long)(b->mem_size >> 20),
+            (unsigned long long)reupload_guest_rewrite);
+    }
     return b;
 }
 

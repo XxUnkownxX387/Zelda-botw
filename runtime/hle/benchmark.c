@@ -166,7 +166,23 @@ typedef struct {
     char gpu_metrics_reason[128];
     int pass_count;
     uint64_t draw_calls_total;
-    struct { char name[32]; uint64_t draw_calls; uint64_t start_gpu_ns; uint64_t end_gpu_ns; uint64_t start_host_ns; uint64_t end_host_ns; } passes[32];
+    struct { 
+        char name[32]; 
+        uint64_t draw_calls; 
+        uint64_t start_gpu_ticks; 
+        uint64_t end_gpu_ticks; 
+        uint64_t start_gpu_ns; 
+        uint64_t end_gpu_ns; 
+        uint64_t start_host_ns; 
+        uint64_t end_host_ns; 
+        double duration_ms; 
+    } passes[32];
+    // Per-frame GPU time by pass type (ms)
+    double gpu_gbuffer_ms;
+    double gpu_shadow_ms;
+    double gpu_post_ms;
+    double gpu_lighting_ms;
+    double gpu_other_ms;
     uint64_t texture_memory_bc1;
     uint64_t texture_memory_astc;
     uint64_t texture_memory_rgba8;
@@ -978,7 +994,17 @@ static Result *measure(void) {
     extern bool gpu_metrics_enabled(void);
     extern int gpu_metrics_pass_count;
     extern uint64_t gpu_metrics_draw_calls_total;
-    extern struct { char name[32]; uint64_t draw_calls; uint64_t start_gpu_ns; uint64_t end_gpu_ns; uint64_t start_host_ns; uint64_t end_host_ns; } gpu_metrics_passes[32];
+    extern struct { 
+        char name[32]; 
+        uint64_t draw_calls; 
+        uint64_t start_gpu_ticks; 
+        uint64_t end_gpu_ticks; 
+        uint64_t start_gpu_ns; 
+        uint64_t end_gpu_ns; 
+        uint64_t start_host_ns; 
+        uint64_t end_host_ns; 
+        double duration_ms; 
+    } gpu_metrics_passes[32];
     extern uint64_t gpu_metrics_draw_calls_total;
     extern uint64_t gpu_metrics_texture_memory_bc1;
     extern uint64_t gpu_metrics_texture_memory_astc;
@@ -988,6 +1014,11 @@ static Result *measure(void) {
     extern uint64_t gpu_metrics_texture_memory_bc7;
     extern uint64_t gpu_metrics_texture_memory_other;
     extern bool gpu_metrics_on;
+    extern double gpu_metrics_gbuffer_ms;
+    extern double gpu_metrics_shadow_ms;
+    extern double gpu_metrics_post_ms;
+    extern double gpu_metrics_lighting_ms;
+    extern double gpu_metrics_other_ms;
     
     if (gpu_metrics_enabled()) {
         r->gpu_metrics = true;
@@ -995,12 +1026,25 @@ static Result *measure(void) {
         r->draw_calls_total = gpu_metrics_draw_calls_total;
         for (int i = 0; i < 32 && i < gpu_metrics_pass_count; i++) {
             r->passes[i].draw_calls = gpu_metrics_passes[i].draw_calls;
+            r->passes[i].start_gpu_ticks = gpu_metrics_passes[i].start_gpu_ticks;
+            r->passes[i].end_gpu_ticks = gpu_metrics_passes[i].end_gpu_ticks;
             r->passes[i].start_gpu_ns = gpu_metrics_passes[i].start_gpu_ns;
             r->passes[i].end_gpu_ns = gpu_metrics_passes[i].end_gpu_ns;
             r->passes[i].start_host_ns = gpu_metrics_passes[i].start_host_ns;
             r->passes[i].end_host_ns = gpu_metrics_passes[i].end_host_ns;
+            r->passes[i].duration_ms = gpu_metrics_passes[i].duration_ms;
             strncpy(r->passes[i].name, gpu_metrics_passes[i].name, 31);
         }
+        extern double gpu_metrics_gbuffer_ms;
+        extern double gpu_metrics_shadow_ms;
+        extern double gpu_metrics_post_ms;
+        extern double gpu_metrics_lighting_ms;
+        extern double gpu_metrics_other_ms;
+        r->gpu_gbuffer_ms = gpu_metrics_gbuffer_ms;
+        r->gpu_shadow_ms = gpu_metrics_shadow_ms;
+        r->gpu_post_ms = gpu_metrics_post_ms;
+        r->gpu_lighting_ms = gpu_metrics_lighting_ms;
+        r->gpu_other_ms = gpu_metrics_other_ms;
         r->texture_memory_bc1 = 0;
         r->texture_memory_astc = 0;
         r->texture_memory_rgba8 = 0;

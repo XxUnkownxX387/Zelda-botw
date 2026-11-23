@@ -159,6 +159,7 @@ typedef struct TexBackend {
     int reg;  // slot in textures.c's live list + 1 (a reboot destroys them all)
     uint64_t last_used_frame;  // VRAM budget LRU: frame when this texture was last accessed
     uint64_t mem_size;         // VRAM budget: GPU memory size of this texture (bytes)
+    bool evicted;              // VRAM budget: set when texture was evicted, cleared on re-upload
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)

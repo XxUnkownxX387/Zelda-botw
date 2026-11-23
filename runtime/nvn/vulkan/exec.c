@@ -1416,7 +1416,17 @@ static struct {
 bool gpu_metrics_on = false;
 int gpu_metrics_pass_count = 0;
 uint64_t gpu_metrics_draw_calls_total = 0;
-struct { char name[32]; uint64_t draw_calls; uint64_t start_host_ns; uint64_t end_host_ns; uint64_t start_gpu_ns; uint64_t end_gpu_ns; } gpu_metrics_passes[32];
+struct {
+    char name[32];
+    uint64_t draw_calls;
+    uint64_t start_host_ns;
+    uint64_t end_host_ns;
+    uint64_t start_gpu_ticks;     // raw GPU timestamp (ticks)
+    uint64_t end_gpu_ticks;       // raw GPU timestamp (ticks)
+    uint64_t start_gpu_ns;        // start time in nanoseconds (converted with timestampPeriod)
+    uint64_t end_gpu_ns;          // end time in nanoseconds (converted with timestampPeriod)
+    double duration_ms;           // pass duration in milliseconds
+} gpu_metrics_passes[32];
 uint64_t gpu_metrics_texture_memory_bc1 = 0;
 uint64_t gpu_metrics_texture_memory_astc = 0;
 uint64_t gpu_metrics_texture_memory_rgba8 = 0;
@@ -1425,6 +1435,13 @@ uint64_t gpu_metrics_texture_memory_bc5 = 0;
 uint64_t gpu_metrics_texture_memory_bc7 = 0;
 uint64_t gpu_metrics_texture_memory_other = 0;
 static VkQueryPool gpu_metrics_qp = VK_NULL_HANDLE;
+
+// Per-frame GPU time sums by pass type (ms)
+double gpu_metrics_gbuffer_ms = 0;
+double gpu_metrics_shadow_ms = 0;
+double gpu_metrics_post_ms = 0;
+double gpu_metrics_lighting_ms = 0;
+double gpu_metrics_other_ms = 0;
 
 bool gpu_metrics_enabled(void) {
     static int on = -1;
@@ -1525,18 +1542,51 @@ void gpu_metrics_collect_texture(uint32_t format, uint64_t bytes) {
 void gpu_metrics_collect(void *r) {
     if (!gpu_metrics_on || gpu_metrics_qp == VK_NULL_HANDLE || gpu_metrics_pass_count == 0) return;
 
-    // Resolve GPU timestamps
+    // Resolve GPU timestamps (raw ticks)
     uint64_t timestamps[64];
     VkResult result = vkGetQueryPoolResults(g_vk.dev, gpu_metrics_qp, 0, gpu_metrics_pass_count * 2,
                                              sizeof timestamps, timestamps, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-    if (result == VK_SUCCESS) {
-        for (int i = 0; i < gpu_metrics_pass_count; i++) {
-            gpu_metrics_passes[i].start_gpu_ns = timestamps[i * 2];
-            gpu_metrics_passes[i].end_gpu_ns = timestamps[i * 2 + 1];
-        }
-    } else {
+    if (result != VK_SUCCESS) {
         LOG("[gpu-metrics] timestamp query failed: %d\n", result);
+        return;
     }
+
+    // timestampValidBits not available in NDK headers; assume 64 bits (modern GPUs)
+    // Modern GPUs typically have 64-bit timestamp counters
+    uint64_t mask = UINT64_MAX;
+
+    double timestamp_period_ns = g_vk.props.limits.timestampPeriod;  // ns per tick
+
+    // Per-frame sums by pass type
+    double gbuffer_ms = 0, shadow_ms = 0, post_ms = 0, lighting_ms = 0, other_ms = 0;
+
+    for (int i = 0; i < gpu_metrics_pass_count; i++) {
+        uint64_t start_ticks = timestamps[i * 2] & mask;
+        uint64_t end_ticks = timestamps[i * 2 + 1] & mask;
+
+        gpu_metrics_passes[i].start_gpu_ticks = start_ticks;
+        gpu_metrics_passes[i].end_gpu_ticks = end_ticks;
+        gpu_metrics_passes[i].start_gpu_ns = (uint64_t)(start_ticks * timestamp_period_ns);
+        gpu_metrics_passes[i].end_gpu_ns = (uint64_t)(end_ticks * timestamp_period_ns);
+
+        double duration_ns = (end_ticks > start_ticks) ? (end_ticks - start_ticks) * timestamp_period_ns : 0;
+        gpu_metrics_passes[i].duration_ms = duration_ns / 1e6;
+
+        // Sum by pass type
+        const char *name = gpu_metrics_passes[i].name;
+        if (strcmp(name, "G-buffer") == 0) gbuffer_ms += gpu_metrics_passes[i].duration_ms;
+        else if (strcmp(name, "shadow") == 0) shadow_ms += gpu_metrics_passes[i].duration_ms;
+        else if (strcmp(name, "post") == 0) post_ms += gpu_metrics_passes[i].duration_ms;
+        else if (strcmp(name, "lighting") == 0) lighting_ms += gpu_metrics_passes[i].duration_ms;
+        else other_ms += gpu_metrics_passes[i].duration_ms;
+    }
+
+    // Store per-frame sums in a global for report
+    gpu_metrics_gbuffer_ms = gbuffer_ms;
+    gpu_metrics_shadow_ms = shadow_ms;
+    gpu_metrics_post_ms = post_ms;
+    gpu_metrics_lighting_ms = lighting_ms;
+    gpu_metrics_other_ms = other_ms;
 }
 
 
