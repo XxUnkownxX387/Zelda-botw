@@ -765,7 +765,16 @@ static void create_device(void) {
     // VK_ARM_shader_core_properties: shader core performance counters
     if (has_ext(ep, ne, "VK_ARM_shader_core_properties")) {
         g_vk.shader_core_properties_available = true;
-        LOG("[vk-cap] VK_ARM_shader_core_properties available\n");
+        VkPhysicalDeviceShaderCorePropertiesARM core_props = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_PROPERTIES_ARM
+        };
+        VkPhysicalDeviceProperties2 props2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &core_props
+        };
+        vkGetPhysicalDeviceProperties2(g_vk.phys, &props2);
+        LOG("[vk-cap] VK_ARM_shader_core_properties available: pixelRate=%u texelRate=%u fmaRate=%u\n",
+            core_props.pixelRate, core_props.texelRate, core_props.fmaRate);
     } else {
         g_vk.shader_core_properties_available = false;
         LOG("[vk-cap] VK_ARM_shader_core_properties NOT available\n");
@@ -2493,10 +2502,9 @@ bool vk_fragment_shading_rate(void) { return g_vk.fragment_shading_rate; }
 bool vk_astc_hdr(void) { return g_vk.texture_compression_astc_hdr; }
 
 bool vk_shader_core_properties_available(void) {
-    // Check if VK_ARM_shader_core_properties is available
-    // This would be set during device initialization when querying extensions
     return g_vk.shader_core_properties_available;
 }
+
 bool vk_maintenance5(void) { return g_vk.api >= VK_API_VERSION_1_3 || true; }  // always available on Android 1.3+
 bool vk_sync2(void) { return g_vk.sync2; }
 bool vk_dynamic_rendering(void) { return g_vk.dyn_render; }

@@ -166,7 +166,7 @@ typedef struct {
     char gpu_metrics_reason[128];
     int pass_count;
     uint64_t draw_calls_total;
-    struct { char name[32]; uint64_t draw_calls; uint64_t gpu_ns; uint64_t start_host_ns; uint64_t end_host_ns; } passes[32];
+    struct { char name[32]; uint64_t draw_calls; uint64_t start_gpu_ns; uint64_t end_gpu_ns; uint64_t start_host_ns; uint64_t end_host_ns; } passes[32];
     uint64_t texture_memory_bc1;
     uint64_t texture_memory_astc;
     uint64_t texture_memory_rgba8;
@@ -870,9 +870,10 @@ static Result *measure(void) {
     // GPU metrics (LARECOMP_GPU_METRICS=1)
     extern bool gpu_metrics_enabled(void);
     extern void gpu_metrics_begin_pass(void);
-    extern void gpu_metrics_end_pass(const char *pass_name);
-    extern void gpu_metrics_collect(Result *r);
+    extern void gpu_metrics_end_pass(void);
+    extern void gpu_metrics_collect(void *r);
     extern void gpu_metrics_reset(void);
+    extern bool vk_shader_core_properties_available(void);
     
     Result *r = &results[nresults];
     *r = (Result){.scene = cur_scene, .repeat = cur_repeat, .load_s = load_s, .camera_s = camera_s, .warmup_s = warm_s, .frames = win_n, .start = power_start, .hz_start = hz_start};
@@ -977,7 +978,7 @@ static Result *measure(void) {
     extern bool gpu_metrics_enabled(void);
     extern int gpu_metrics_pass_count;
     extern uint64_t gpu_metrics_draw_calls_total;
-    extern struct { char name[32]; uint64_t draw_calls; uint64_t start_host_ns; uint64_t end_host_ns; } gpu_metrics_passes[32];
+    extern struct { char name[32]; uint64_t draw_calls; uint64_t start_gpu_ns; uint64_t end_gpu_ns; uint64_t start_host_ns; uint64_t end_host_ns; } gpu_metrics_passes[32];
     extern uint64_t gpu_metrics_draw_calls_total;
     extern uint64_t gpu_metrics_texture_memory_bc1;
     extern uint64_t gpu_metrics_texture_memory_astc;
@@ -994,6 +995,8 @@ static Result *measure(void) {
         r->draw_calls_total = gpu_metrics_draw_calls_total;
         for (int i = 0; i < 32 && i < gpu_metrics_pass_count; i++) {
             r->passes[i].draw_calls = gpu_metrics_passes[i].draw_calls;
+            r->passes[i].start_gpu_ns = gpu_metrics_passes[i].start_gpu_ns;
+            r->passes[i].end_gpu_ns = gpu_metrics_passes[i].end_gpu_ns;
             r->passes[i].start_host_ns = gpu_metrics_passes[i].start_host_ns;
             r->passes[i].end_host_ns = gpu_metrics_passes[i].end_host_ns;
             strncpy(r->passes[i].name, gpu_metrics_passes[i].name, 31);
@@ -1024,7 +1027,7 @@ static Result *measure(void) {
         if (!vk_shader_core_properties_available()) {
             snprintf(r->shader_core_reason, sizeof r->shader_core_reason, "VK_ARM_shader_core_properties not available");
         } else {
-            snprintf(r->shader_core_reason, sizeof r->shader_core_reason, "available");
+            snprintf(r->shader_core_reason, sizeof r->shader_core_reason, "available (see log for pixelRate/texelRate/fmaRate)");
         }
     } else {
         snprintf(r->gpu_metrics_reason, sizeof r->gpu_metrics_reason, "disabled (set LARECOMP_GPU_METRICS=1)");

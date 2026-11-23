@@ -1416,7 +1416,7 @@ static struct {
 bool gpu_metrics_on = false;
 int gpu_metrics_pass_count = 0;
 uint64_t gpu_metrics_draw_calls_total = 0;
-struct { char name[32]; uint64_t draw_calls; uint64_t start_host_ns; uint64_t end_host_ns; } gpu_metrics_passes[32];
+struct { char name[32]; uint64_t draw_calls; uint64_t start_host_ns; uint64_t end_host_ns; uint64_t start_gpu_ns; uint64_t end_gpu_ns; } gpu_metrics_passes[32];
 uint64_t gpu_metrics_texture_memory_bc1 = 0;
 uint64_t gpu_metrics_texture_memory_astc = 0;
 uint64_t gpu_metrics_texture_memory_rgba8 = 0;
@@ -1424,6 +1424,7 @@ uint64_t gpu_metrics_texture_memory_bc4 = 0;
 uint64_t gpu_metrics_texture_memory_bc5 = 0;
 uint64_t gpu_metrics_texture_memory_bc7 = 0;
 uint64_t gpu_metrics_texture_memory_other = 0;
+static VkQueryPool gpu_metrics_qp = VK_NULL_HANDLE;
 
 bool gpu_metrics_enabled(void) {
     static int on = -1;
@@ -1468,10 +1469,24 @@ void gpu_metrics_begin_pass(void) {
     gpu_metrics_passes[gpu_metrics_pass_count].draw_calls = 0;
     gpu_metrics_passes[gpu_metrics_pass_count].start_host_ns = SDL_GetTicksNS();
     gpu_metrics_passes[gpu_metrics_pass_count].end_host_ns = 0;
+    gpu_metrics_passes[gpu_metrics_pass_count].start_gpu_ns = 0;
+    gpu_metrics_passes[gpu_metrics_pass_count].end_gpu_ns = 0;
+
+    // Write GPU timestamp at pass start
+    if (gpu_metrics_qp != VK_NULL_HANDLE) {
+        uint32_t query_index = gpu_metrics_pass_count * 2;
+        vkCmdWriteTimestamp2(vk_cmd(), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, gpu_metrics_qp, query_index);
+    }
 }
 
 void gpu_metrics_end_pass(void) {
     if (!gpu_metrics_on) return;
+
+    // Write GPU timestamp at pass end
+    if (gpu_metrics_qp != VK_NULL_HANDLE) {
+        uint32_t query_index = gpu_metrics_pass_count * 2 + 1;
+        vkCmdWriteTimestamp2(vk_cmd(), VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, gpu_metrics_qp, query_index);
+    }
 
     uint64_t end_host_ns = SDL_GetTicksNS();
     gpu_metrics_passes[gpu_metrics_pass_count].end_host_ns = end_host_ns;
@@ -1504,6 +1519,23 @@ void gpu_metrics_collect_texture(uint32_t format, uint64_t bytes) {
             gpu_metrics_texture_memory_bc7 += bytes; break;
         default:
             gpu_metrics_texture_memory_other += bytes; break;
+    }
+}
+
+void gpu_metrics_collect(void *r) {
+    if (!gpu_metrics_on || gpu_metrics_qp == VK_NULL_HANDLE || gpu_metrics_pass_count == 0) return;
+
+    // Resolve GPU timestamps
+    uint64_t timestamps[64];
+    VkResult result = vkGetQueryPoolResults(g_vk.dev, gpu_metrics_qp, 0, gpu_metrics_pass_count * 2,
+                                             sizeof timestamps, timestamps, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    if (result == VK_SUCCESS) {
+        for (int i = 0; i < gpu_metrics_pass_count; i++) {
+            gpu_metrics_passes[i].start_gpu_ns = timestamps[i * 2];
+            gpu_metrics_passes[i].end_gpu_ns = timestamps[i * 2 + 1];
+        }
+    } else {
+        LOG("[gpu-metrics] timestamp query failed: %d\n", result);
     }
 }
 
@@ -1682,6 +1714,14 @@ void vk_exec_init(void) {
         prof_up_ns = 0;
         VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = SUBS * 2};
         if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &prof_qp) != VK_SUCCESS) prof_qp = VK_NULL_HANDLE;
+    }
+    // GPU metrics query pool (LARECOMP_GPU_METRICS=1)
+    if (gpu_metrics_enabled()) {
+        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 64};
+        if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &gpu_metrics_qp) != VK_SUCCESS) {
+            gpu_metrics_qp = VK_NULL_HANDLE;
+            LOG("[gpu-metrics] query pool creation failed\n");
+        }
     }
     st_defaults();
     {   // LARECOMP_TEX_PRELOAD (default on; LARECOMP_TEX_PRELOAD=0 to disable): the game's textures created during
