@@ -193,6 +193,7 @@ jobs:
         env:
           ANDROID_NDK: /home/runner/android-sdk/ndk/30.0.16248370
           ANDROID_HOME: /home/runner/android-sdk
+          ANDROID_NDK_LINUX: /home/runner/android-sdk/ndk/30.0.16248370
 
       - name: Build debug APK (full)
         run: ./gradlew assembleDebug
