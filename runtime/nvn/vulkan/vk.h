@@ -254,3 +254,6 @@ bool vk_external_memory_fd(void);
 bool vk_external_memory_dmabuf(void);
 bool vk_feedback_loop_layout(void);
 bool vk_shader_core_properties_available(void);  // VK_ARM_shader_core_properties availability
+void vram_budget_init(void);
+uint64_t vram_reupload_after_eviction(void);
+uint64_t vram_reupload_guest_rewrite(void);

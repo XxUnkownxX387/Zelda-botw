@@ -1021,8 +1021,8 @@ static Result *measure(void) {
     extern double gpu_metrics_post_ms;
     extern double gpu_metrics_lighting_ms;
     extern double gpu_metrics_other_ms;
-    extern uint64_t reupload_after_eviction;
-    extern uint64_t reupload_guest_rewrite;
+    extern uint64_t vram_reupload_after_eviction(void);
+    extern uint64_t vram_reupload_guest_rewrite(void);
     
     if (gpu_metrics_enabled()) {
         r->gpu_metrics = true;
@@ -1070,10 +1070,8 @@ static Result *measure(void) {
         r->texture_memory_bc5 = gpu_metrics_texture_memory_bc5;
         r->texture_memory_bc7 = gpu_metrics_texture_memory_bc7;
         r->texture_memory_other = gpu_metrics_texture_memory_other;
-        extern uint64_t reupload_after_eviction;
-        extern uint64_t reupload_guest_rewrite;
-        r->reupload_after_eviction = reupload_after_eviction;
-        r->reupload_guest_rewrite = reupload_guest_rewrite;
+        r->reupload_after_eviction = vram_reupload_after_eviction();
+        r->reupload_guest_rewrite = vram_reupload_guest_rewrite();
         snprintf(r->gpu_metrics_reason, sizeof r->gpu_metrics_reason, "collected");
         extern bool vk_shader_core_properties_available(void);
         if (!vk_shader_core_properties_available()) {

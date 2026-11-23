@@ -46,8 +46,8 @@ static NvnTexture **g_live;
 static int g_nlive, g_cap_live;
 
 // Re-upload counters (distinguish eviction vs guest rewrite)
-static uint64_t reupload_after_eviction = 0;
-static uint64_t reupload_guest_rewrite = 0;
+uint64_t reupload_after_eviction = 0;
+uint64_t reupload_guest_rewrite = 0;
 
 // Forward declarations
 extern uint64_t renderer_present_count(void);
@@ -59,7 +59,7 @@ extern CopyAlias aliases[8];
 
 // Initialize VRAM budget from settings (-1=Auto, 0=disabled, >0=MB).
 // Called after GPU selection to expose effective budget.
-static void vram_budget_init(void) {
+void vram_budget_init(void) {
     if (g_vram_budget_base_bytes != 0) return; // already initialized
     
     if (g_settings.max_gpu_mem_mb > 0) {
@@ -2153,4 +2153,12 @@ VkSampler vk_default_sampler(bool linear) {
         VK_CHECK(vkCreateSampler(g_vk.dev, &si, NULL, &s[linear]));
     }
     return s[linear];
+}
+
+uint64_t vram_reupload_after_eviction(void) {
+    return reupload_after_eviction;
+}
+
+uint64_t vram_reupload_guest_rewrite(void) {
+    return reupload_guest_rewrite;
 }
