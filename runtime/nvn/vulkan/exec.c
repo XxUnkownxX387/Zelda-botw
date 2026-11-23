@@ -1410,6 +1410,104 @@ static struct {
     uint64_t copy_row_stride, copy_image_stride;
 } st;
 
+
+
+// ================================================================== GPU metrics (LARECOMP_GPU_METRICS=1)
+bool gpu_metrics_on = false;
+int gpu_metrics_pass_count = 0;
+uint64_t gpu_metrics_draw_calls_total = 0;
+struct { char name[32]; uint64_t draw_calls; uint64_t start_host_ns; uint64_t end_host_ns; } gpu_metrics_passes[32];
+uint64_t gpu_metrics_texture_memory_bc1 = 0;
+uint64_t gpu_metrics_texture_memory_astc = 0;
+uint64_t gpu_metrics_texture_memory_rgba8 = 0;
+uint64_t gpu_metrics_texture_memory_bc4 = 0;
+uint64_t gpu_metrics_texture_memory_bc5 = 0;
+uint64_t gpu_metrics_texture_memory_bc7 = 0;
+uint64_t gpu_metrics_texture_memory_other = 0;
+
+bool gpu_metrics_enabled(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("LARECOMP_GPU_METRICS");
+        on = e && atoi(e) != 0;
+        if (on) LOG("[gpu-metrics] enabled\n");
+    }
+    return on;
+}
+
+void gpu_metrics_reset(void) {
+    gpu_metrics_on = false;
+    gpu_metrics_pass_count = 0;
+    gpu_metrics_draw_calls_total = 0;
+    memset(gpu_metrics_passes, 0, sizeof(gpu_metrics_passes));
+    gpu_metrics_texture_memory_bc1 = 0;
+    gpu_metrics_texture_memory_astc = 0;
+    gpu_metrics_texture_memory_rgba8 = 0;
+    gpu_metrics_texture_memory_bc4 = 0;
+    gpu_metrics_texture_memory_bc5 = 0;
+    gpu_metrics_texture_memory_bc7 = 0;
+    gpu_metrics_texture_memory_other = 0;
+}
+
+void gpu_metrics_begin_pass(void) {
+    if (!gpu_metrics_enabled()) return;
+    gpu_metrics_on = true;
+
+    const char *pass_name = "unknown";
+    NvnTexture *t0 = st.rt.ncolor ? st.rt.color[0] : NULL;
+    if (t0) {
+        if (st.rt.ncolor >= 3 && st.rt.depth) pass_name = "G-buffer";
+        else if (st.rt.depth && !st.rt.ncolor) pass_name = "shadow";
+        else if (st.rt.ncolor == 1 && !st.rt.depth) pass_name = "post";
+        else if (st.rt.ncolor >= 2 && !st.rt.depth) pass_name = "lighting";
+        else pass_name = "other";
+    }
+
+    strncpy(gpu_metrics_passes[gpu_metrics_pass_count].name, pass_name, 31);
+    gpu_metrics_passes[gpu_metrics_pass_count].name[31] = 0;
+    gpu_metrics_passes[gpu_metrics_pass_count].draw_calls = 0;
+    gpu_metrics_passes[gpu_metrics_pass_count].start_host_ns = SDL_GetTicksNS();
+    gpu_metrics_passes[gpu_metrics_pass_count].end_host_ns = 0;
+}
+
+void gpu_metrics_end_pass(void) {
+    if (!gpu_metrics_on) return;
+
+    uint64_t end_host_ns = SDL_GetTicksNS();
+    gpu_metrics_passes[gpu_metrics_pass_count].end_host_ns = end_host_ns;
+    gpu_metrics_draw_calls_total += gpu_metrics_passes[gpu_metrics_pass_count].draw_calls;
+    gpu_metrics_pass_count++;
+}
+
+void gpu_metrics_count_draw(void) {
+    if (gpu_metrics_on) gpu_metrics_passes[gpu_metrics_pass_count].draw_calls++;
+}
+
+void gpu_metrics_collect_texture(uint32_t format, uint64_t bytes) {
+    if (!gpu_metrics_on) return;
+
+    switch (format) {
+        case 0x5E: case 0x5F: case 0x60: case 0x61:
+            gpu_metrics_texture_memory_bc1 += bytes; break;
+        case 0x79: case 0x7A: case 0x7B: case 0x7C: case 0x7D: case 0x7E: case 0x7F:
+        case 0x80: case 0x81: case 0x82: case 0x83: case 0x84: case 0x85: case 0x86:
+        case 0x87: case 0x88: case 0x89: case 0x8A: case 0x8B: case 0x8C: case 0x8D:
+        case 0x8E: case 0x8F: case 0x90: case 0x91: case 0x92: case 0x93: case 0x94:
+            gpu_metrics_texture_memory_astc += bytes; break;
+        case 0x5C: case 0x5D:
+            gpu_metrics_texture_memory_rgba8 += bytes; break;
+        case 0x49: case 0x4A:
+            gpu_metrics_texture_memory_bc4 += bytes; break;
+        case 0x4B: case 0x4C:
+            gpu_metrics_texture_memory_bc5 += bytes; break;
+        case 0x4D: case 0x4E:
+            gpu_metrics_texture_memory_bc7 += bytes; break;
+        default:
+            gpu_metrics_texture_memory_other += bytes; break;
+    }
+}
+
+
 uint32_t nvn_window_origin(void);
 uint32_t nvn_depth_mode(void);
 bool renderer_origin_lower_left(void) { return nvn_window_origin() == 0; }
@@ -1977,6 +2075,7 @@ static void vk_end_pass_at(int line) {
     if (!in_pass) return;
     if (prof && line < 4096) prof_end_line[line]++;
     vk_end_rendering(vk_cmd());
+    gpu_metrics_end_pass();
     
     // Framegen: capture main scene pass (G-buffer) depth/color for warp
     extern bool framepace_gen_doubled(void);
@@ -2097,6 +2196,7 @@ NvnTexture* framegen_get_target_texture(void) {
 static VkRect2D scissor_rect(void);
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
+    gpu_metrics_begin_pass();
     pipeline_dirty = true;
     bool restart = in_pass && st.rt_dirty;  // (a pass that changes its render targets restarts)
     vk_end_pass();
@@ -7833,6 +7933,7 @@ static void draw_(CmdRec *r, bool indexed) {
     if (draw_w) pass_stored = true;  // (the pass stored: the next pass waits for it - a pass that only reads owes no barrier)
     stat_draws++;
     cum_draws++;
+    gpu_metrics_count_draw();
     if (g_gpuprof_frame && gp_n) {
         if (!gp_draws[gp_n - 1]) {  // first draw of the row: its fragment shader hash
             size_t l = strlen(gp_label[gp_n - 1]);

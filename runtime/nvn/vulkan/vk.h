@@ -75,6 +75,7 @@ typedef struct {
     int mali_driver_major;   // the Mali driver version (VK_KHR_driver_properties driverInfo, "rNNpM") - Mali-G720 / Immortalis Gen4
     int mali_driver_minor;   // the Mali driver version's minor part (VK_KHR_driver_properties driverInfo, "rNNpM")
     bool texture_compression_astc_hdr; // VK_EXT_texture_compression_astc_hdr: hardware ASTC HDR decoding
+    bool shader_core_properties_available; // VK_ARM_shader_core_properties available
 #ifdef __ANDROID__
     bool map_placed;              // VK_EXT_map_memory_placed: the guest heap mapped as GPU memory (exec.c vk_heap_place)
     bool mem_fd;                  // VK_KHR_external_memory_fd: the same through an exported file mapped there (vk_heap_place)
@@ -250,3 +251,4 @@ bool vk_map_memory_placed(void);
 bool vk_external_memory_fd(void);
 bool vk_external_memory_dmabuf(void);
 bool vk_feedback_loop_layout(void);
+bool vk_shader_core_properties_available(void);  // VK_ARM_shader_core_properties availability

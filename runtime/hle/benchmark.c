@@ -161,6 +161,21 @@ typedef struct {
     int mali_driver_minor;
     int mem_strategy;           // VKM_STRATEGY_*
     
+    // GPU metrics (LARECOMP_GPU_METRICS=1)
+    bool gpu_metrics;
+    char gpu_metrics_reason[128];
+    int pass_count;
+    uint64_t draw_calls_total;
+    struct { char name[32]; uint64_t draw_calls; uint64_t gpu_ns; uint64_t start_host_ns; uint64_t end_host_ns; } passes[32];
+    uint64_t texture_memory_bc1;
+    uint64_t texture_memory_astc;
+    uint64_t texture_memory_rgba8;
+    uint64_t texture_memory_bc4;
+    uint64_t texture_memory_bc5;
+    uint64_t texture_memory_bc7;
+    uint64_t texture_memory_other;
+    char shader_core_reason[128];
+    
     // Target vs actual resolution/FPS
     int target_fps;
     int actual_fps_mode;        // fps_mode_now()
@@ -634,6 +649,8 @@ static bool under(const char *dir, const char *p) {
 
 // Before the start screen and anything that opens a save or the settings
 void benchmark_init(void) {
+    extern void gpu_metrics_reset(void);
+    gpu_metrics_reset();
     const char *path = getenv("LARECOMP_BENCHMARK");
     if (!path || !*path) return;
     g_benchmark = true;
@@ -850,6 +867,12 @@ static Result *measure(void) {
                 vk_dynamic_rendering(void), vk_external_memory_host(void), vk_map_memory_placed(void),
                 vk_external_memory_fd(void), vk_external_memory_dmabuf(void), vk_feedback_loop_layout(void);
     extern int fps_mode_now(void);
+    // GPU metrics (LARECOMP_GPU_METRICS=1)
+    extern bool gpu_metrics_enabled(void);
+    extern void gpu_metrics_begin_pass(void);
+    extern void gpu_metrics_end_pass(const char *pass_name);
+    extern void gpu_metrics_collect(Result *r);
+    extern void gpu_metrics_reset(void);
     
     Result *r = &results[nresults];
     *r = (Result){.scene = cur_scene, .repeat = cur_repeat, .load_s = load_s, .camera_s = camera_s, .warmup_s = warm_s, .frames = win_n, .start = power_start, .hz_start = hz_start};
@@ -950,6 +973,63 @@ static Result *measure(void) {
     r->mali_driver_minor = vk_mali_driver_minor();
     r->mem_strategy = vk_mem_strategy();
     
+    // GPU metrics (LARECOMP_GPU_METRICS=1)
+    extern bool gpu_metrics_enabled(void);
+    extern int gpu_metrics_pass_count;
+    extern uint64_t gpu_metrics_draw_calls_total;
+    extern struct { char name[32]; uint64_t draw_calls; uint64_t start_host_ns; uint64_t end_host_ns; } gpu_metrics_passes[32];
+    extern uint64_t gpu_metrics_draw_calls_total;
+    extern uint64_t gpu_metrics_texture_memory_bc1;
+    extern uint64_t gpu_metrics_texture_memory_astc;
+    extern uint64_t gpu_metrics_texture_memory_rgba8;
+    extern uint64_t gpu_metrics_texture_memory_bc4;
+    extern uint64_t gpu_metrics_texture_memory_bc5;
+    extern uint64_t gpu_metrics_texture_memory_bc7;
+    extern uint64_t gpu_metrics_texture_memory_other;
+    extern bool gpu_metrics_on;
+    
+    if (gpu_metrics_enabled()) {
+        r->gpu_metrics = true;
+        r->pass_count = gpu_metrics_pass_count;
+        r->draw_calls_total = gpu_metrics_draw_calls_total;
+        for (int i = 0; i < 32 && i < gpu_metrics_pass_count; i++) {
+            r->passes[i].draw_calls = gpu_metrics_passes[i].draw_calls;
+            r->passes[i].start_host_ns = gpu_metrics_passes[i].start_host_ns;
+            r->passes[i].end_host_ns = gpu_metrics_passes[i].end_host_ns;
+            strncpy(r->passes[i].name, gpu_metrics_passes[i].name, 31);
+        }
+        r->texture_memory_bc1 = 0;
+        r->texture_memory_astc = 0;
+        r->texture_memory_rgba8 = 0;
+        r->texture_memory_bc4 = 0;
+        r->texture_memory_bc5 = 0;
+        r->texture_memory_bc7 = 0;
+        r->texture_memory_other = 0;
+        extern uint64_t gpu_metrics_texture_memory_bc1;
+        extern uint64_t gpu_metrics_texture_memory_astc;
+        extern uint64_t gpu_metrics_texture_memory_rgba8;
+        extern uint64_t gpu_metrics_texture_memory_bc4;
+        extern uint64_t gpu_metrics_texture_memory_bc5;
+        extern uint64_t gpu_metrics_texture_memory_bc7;
+        extern uint64_t gpu_metrics_texture_memory_other;
+        r->texture_memory_bc1 = gpu_metrics_texture_memory_bc1;
+        r->texture_memory_astc = gpu_metrics_texture_memory_astc;
+        r->texture_memory_rgba8 = gpu_metrics_texture_memory_rgba8;
+        r->texture_memory_bc4 = gpu_metrics_texture_memory_bc4;
+        r->texture_memory_bc5 = gpu_metrics_texture_memory_bc5;
+        r->texture_memory_bc7 = gpu_metrics_texture_memory_bc7;
+        r->texture_memory_other = gpu_metrics_texture_memory_other;
+        snprintf(r->gpu_metrics_reason, sizeof r->gpu_metrics_reason, "collected");
+        extern bool vk_shader_core_properties_available(void);
+        if (!vk_shader_core_properties_available()) {
+            snprintf(r->shader_core_reason, sizeof r->shader_core_reason, "VK_ARM_shader_core_properties not available");
+        } else {
+            snprintf(r->shader_core_reason, sizeof r->shader_core_reason, "available");
+        }
+    } else {
+        snprintf(r->gpu_metrics_reason, sizeof r->gpu_metrics_reason, "disabled (set LARECOMP_GPU_METRICS=1)");
+    }
+    
     // Target vs actual
     r->target_fps = g_settings.fps_mode;
     r->actual_fps_mode = fps_mode_now();
@@ -958,6 +1038,11 @@ static Result *measure(void) {
     r->out_lines = g_settings.out_lines;
     r->upscaler = g_settings.upscaler;
     r->antialias = g_settings.antialias;
+
+    // GPU metrics (LARECOMP_GPU_METRICS=1)
+    if (gpu_metrics_enabled()) {
+        gpu_metrics_collect(r);
+    }
     
     return r;
 }

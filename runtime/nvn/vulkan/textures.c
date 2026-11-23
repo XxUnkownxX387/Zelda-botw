@@ -13,6 +13,9 @@
 #include "../texpatch.h"
 #include "../../settings.h"  // g_settings.max_gpu_mem_mb
 
+// GPU metrics (LARECOMP_GPU_METRICS=1)
+extern void gpu_metrics_collect_texture(uint32_t format, uint64_t bytes);
+
 // ================================================================== VRAM budget (LRU eviction)
 // Incremental accounting distinguishes live, deferred (in-flight), and collected textures.
 // -1=Auto persists across GPU selection; effective budget exposed after GPU pick.
@@ -830,6 +833,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     vmaGetAllocationInfo(g_vk.vma, b->mem, &alloc_info);
     b->mem_size = alloc_info.size;
     vram_budget_add(b->mem_size);
+    gpu_metrics_collect_texture(t->format, b->mem_size);
     vram_budget_init();
 
     b->format = vf;

@@ -762,6 +762,14 @@ static void create_device(void) {
         ext[n_ext++] = VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME;
         LOG("[vk-cap] VK_EXT_texture_compression_astc_hdr enabled (astc_hdr_hw_accel setting)\n");
     }
+    // VK_ARM_shader_core_properties: shader core performance counters
+    if (has_ext(ep, ne, "VK_ARM_shader_core_properties")) {
+        g_vk.shader_core_properties_available = true;
+        LOG("[vk-cap] VK_ARM_shader_core_properties available\n");
+    } else {
+        g_vk.shader_core_properties_available = false;
+        LOG("[vk-cap] VK_ARM_shader_core_properties NOT available\n");
+    }
     // (which ways this driver could export memory at all: a report from a Mali or an Xclipse says what to try next -
     // the option did nothing on a Mali-G720 r49p1 with no word in the log, #249)
     LOG("[vk-cap] memory export: fd %s, dma-buf %s, placed maps %s, host import %s, feedback loop layout %s\n",
@@ -2483,6 +2491,12 @@ int vk_mem_strategy(void) { return g_vk.mem_strategy; }
 
 bool vk_fragment_shading_rate(void) { return g_vk.fragment_shading_rate; }
 bool vk_astc_hdr(void) { return g_vk.texture_compression_astc_hdr; }
+
+bool vk_shader_core_properties_available(void) {
+    // Check if VK_ARM_shader_core_properties is available
+    // This would be set during device initialization when querying extensions
+    return g_vk.shader_core_properties_available;
+}
 bool vk_maintenance5(void) { return g_vk.api >= VK_API_VERSION_1_3 || true; }  // always available on Android 1.3+
 bool vk_sync2(void) { return g_vk.sync2; }
 bool vk_dynamic_rendering(void) { return g_vk.dyn_render; }
