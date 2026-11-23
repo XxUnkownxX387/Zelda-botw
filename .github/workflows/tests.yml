@@ -4,6 +4,10 @@ on:
   push:
     branches: [ main, "work/mali-g720-phase1", "work/build-repro-0.3.4-beta" ]
   workflow_dispatch:
+  # build-apk-full also triggers on version tags
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   host-tests:
@@ -42,7 +46,7 @@ jobs:
           ./build/test_bc3_astc_uc 10000
 
   build-apk:
-    name: Build APK (assembleDebug)
+    name: Build APK (assembleDebug) — fast, no FFmpeg/gen
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
@@ -97,5 +101,126 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: botwrecompandroid-debug
+          path: android/botwrecompandroid/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  build-apk-full:
+    name: Build APK Full (assembleDebug) — with FFmpeg + gen deps
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      ANDROID_HOME: /home/runner/android-sdk
+      ANDROID_SDK_ROOT: /home/runner/android-sdk
+    # Only on manual dispatch or version tags
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Init libadrenotools (adrenotools / Turnip)
+        run: |
+          if [ ! -d third_party/libadrenotools ]; then
+            git clone --depth 1 https://github.com/bylaws/libadrenotools third_party/libadrenotools
+            git -C third_party/libadrenotools submodule update --init --recursive
+          fi
+          ls third_party/libadrenotools/lib/linkernsbypass
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK components
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build patch unzip
+          mkdir -p $ANDROID_HOME
+          curl -sSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdline-tools.zip -d /tmp
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          mv /tmp/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME --licenses > /dev/null 2>&1 || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME \
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "ndk;30.0.16248370" \
+            "cmake;3.30.4"
+
+      - name: Cache native deps (build_deps.sh output)
+        uses: actions/cache@v4
+        with:
+          path: android/deps/out
+          key: deps-build-${{ runner.os }}-${{ hashFiles('android/deps/build_deps.sh') }}
+          restore-keys: |
+            deps-build-${{ runner.os }}-
+
+      - name: Build native dependencies (android/deps/build_deps.sh)
+        run: ./android/deps/build_deps.sh
+        env:
+          ANDROID_NDK: /home/runner/android-sdk/ndk/30.0.16248370
+
+      - name: Cache FFmpeg build
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/deps/out/lib/libav*.so
+            android/deps/out/lib/libswscale.so
+            android/deps/out/include/libav*
+            android/deps/out/include/libswscale
+          key: deps-ffmpeg-${{ runner.os }}-${{ hashFiles('android/deps/build_ffmpeg.sh') }}
+          restore-keys: |
+            deps-ffmpeg-${{ runner.os }}-
+
+      - name: Build FFmpeg (android/deps/build_ffmpeg.sh)
+        run: ./android/deps/build_ffmpeg.sh
+        env:
+          ANDROID_NDK_LINUX: /home/runner/android-sdk/ndk/30.0.16248370
+
+      - name: Cache gen deps (build_gen_deps.sh output)
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/deps/out/gen
+            android/deps/out/lib/libcapstone.so
+            android/deps/out/lib/libunicorn.so
+            android/deps/out/lib/liblz4.so
+            android/deps/out/lib/libzig.so
+          key: deps-gen-${{ runner.os }}-${{ hashFiles('android/deps/build_gen_deps.sh') }}
+          restore-keys: |
+            deps-gen-${{ runner.os }}-
+
+      - name: Build game-code generator deps (android/deps/build_gen_deps.sh)
+        run: ./android/deps/build_gen_deps.sh
+        env:
+          ANDROID_NDK: /home/runner/android-sdk/ndk/30.0.16248370
+          ANDROID_HOME: /home/runner/android-sdk
+
+      - name: Build debug APK (full)
+        run: ./gradlew assembleDebug
+        working-directory: android/botwrecompandroid
+
+      - name: Verify APK contents (libavcodec.so + gen/python)
+        run: |
+          APK=$(ls android/botwrecompandroid/app/build/outputs/apk/debug/*.apk)
+          echo "=== APK size: $(du -h "$APK" | cut -f1) ==="
+          unzip -l "$APK" | sort -k1 -nr | head -20
+          echo "=== Verification ==="
+          if ! unzip -l "$APK" | grep -q "libavcodec.so"; then
+            echo "ERROR: libavcodec.so NOT FOUND in APK"
+            exit 1
+          fi
+          if ! unzip -l "$APK" | grep -q "gen/python"; then
+            echo "ERROR: gen/python NOT FOUND in APK"
+            exit 1
+          fi
+          echo "OK: libavcodec.so and gen/python present"
+
+      - name: Upload full debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: botwrecompandroid-debug-full
           path: android/botwrecompandroid/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
