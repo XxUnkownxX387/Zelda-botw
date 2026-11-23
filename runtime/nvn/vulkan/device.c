@@ -360,14 +360,15 @@ static void pick_device(void) {
             if (result != VK_SUCCESS) LOG("[vk-cap] gpu %u queue %u surface query failed: %d\n", i, q, result);
             if (vk_backend_queue_supported(&qp[q], result, present)) { present_queue = q; break; }
         }
-        free(qp);
         if (present_queue == UINT32_MAX) {
             LOG("[vk-cap] skipping %s: no graphics+compute queue can present to this surface\n", p.deviceName);
             continue;
         }
+        // Store queue family properties for the selected queue
+        VkQueueFamilyProperties selected_qp = qp[present_queue];
         int score = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 3 : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2 : 1;
         if ((int)i == want) score = 100;
-        if (score > best_score) { best_score = score; best = (int)i; best_queue = present_queue; }
+        if (score > best_score) { best_score = score; best = (int)i; best_queue = present_queue; g_vk.qfp = selected_qp; }
     }
     if (env_on("LARECOMP_TEST_DRIVER_ERROR")) {  // (test: the driver error and its dialog, platform/android.c)
         best = -1, have_api = false;
@@ -411,19 +412,10 @@ static void pick_device(void) {
     g_vk.phys = pd[best];
     free(pd);
     vkGetPhysicalDeviceProperties(g_vk.phys, &g_vk.props);
-    uint32_t nq = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(g_vk.phys, &nq, NULL);
-    VkQueueFamilyProperties *qp = calloc(nq, sizeof *qp);
-    vkGetPhysicalDeviceQueueFamilyProperties(g_vk.phys, &nq, qp);
-    g_vk.qfam = UINT32_MAX;
-    for (uint32_t i = 0; i < nq; i++) {
-        VkBool32 present = VK_FALSE;
-        vkGetPhysicalDeviceSurfaceSupportKHR(g_vk.phys, i, g_vk.surface, &present);
-        if ((qp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && (qp[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && present) { g_vk.qfam = i; break; }
-    }
-    free(qp);
-    if (g_vk.qfam == UINT32_MAX) FATAL("no graphics+present queue\n");
-    LOG("[vk] using %s\n", g_vk.props.deviceName);
+    // Use the already-selected queue family properties
+    g_vk.qfam = g_vk.qfp.queueFlags & VK_QUEUE_GRAPHICS_BIT ? g_vk.qfam : UINT32_MAX; // qfam was set during selection
+    LOG("[vk] using %s (queue family %u, timestampValidBits=%u, timestampPeriod=%.3f ns)\n",
+        g_vk.props.deviceName, g_vk.qfam, g_vk.qfp.timestampValidBits, g_vk.props.limits.timestampPeriod);
 }
 #endif
 
@@ -1141,6 +1133,8 @@ static void create_device(void) {
         VK_CHECK(vkCreatePipelineCache(g_vk.dev, &pc, NULL, &g_vk.pcache));
     }
     free(data);
+    extern void vram_budget_init(void);
+    vram_budget_init();
 }
 
 // Pipeline cache state (serialized by g_cache_mutex)

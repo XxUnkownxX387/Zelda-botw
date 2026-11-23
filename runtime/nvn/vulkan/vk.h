@@ -53,6 +53,7 @@ typedef struct {
     VkDevice dev;
     VkQueue queue;
     uint32_t qfam;
+    VkQueueFamilyProperties qfp;    // selected queue family properties
     VmaAllocator vma;
     VkPhysicalDeviceProperties props;
     VkPipelineCache pcache;

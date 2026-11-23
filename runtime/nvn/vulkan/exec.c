@@ -1551,9 +1551,9 @@ void gpu_metrics_collect(void *r) {
         return;
     }
 
-    // timestampValidBits not available in NDK headers; assume 64 bits (modern GPUs)
-    // Modern GPUs typically have 64-bit timestamp counters
-    uint64_t mask = UINT64_MAX;
+    // timestampValidBits from VkQueueFamilyProperties (graphics queue)
+    uint32_t valid_bits = g_vk.qfp.timestampValidBits;
+    uint64_t mask = (valid_bits == 64 || valid_bits == 0) ? UINT64_MAX : ((1ULL << valid_bits) - 1);
 
     double timestamp_period_ns = g_vk.props.limits.timestampPeriod;  // ns per tick
 

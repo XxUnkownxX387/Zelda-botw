@@ -89,6 +89,9 @@ static void vram_budget_init(void) {
         return;
     }
     g_vram_budget_bytes = g_vram_budget_base_bytes;
+    LOG("[vk] VRAM budget: %d MB (effective %llu MB, hysteresis %d MB, max evict/frame %d)\n",
+        g_vram_budget_auto_mb, (unsigned long long)(g_vram_budget_bytes >> 20), VRAM_HYSTERESIS_MB, VRAM_MAX_EVICT_PER_FRAME);
+    g_vram_budget_bytes = g_vram_budget_base_bytes;
     LOG("[vk] VRAM budget: %d MB (effective %llu MB)\n", g_vram_budget_auto_mb, (unsigned long long)(g_vram_budget_bytes >> 20));
 
     // Rebuild used counter from live textures
