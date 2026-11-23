@@ -12,6 +12,7 @@
 #include "../../settings.h"
 #include "../../framepace.h"
 #include "../rt.h"
+#include <SDL3/SDL_timer.h>
 
 extern bool framepace_in_event(void);  // (hle/framepace.c: the cutscenes, the talks, the item fanfares)
 #ifndef LARECOMP_NO_FFMPEG
@@ -88,6 +89,17 @@ bool framegen_enabled(void) {
     return g_settings.framegen; 
 }  // (Video > Frame generation: off by default)
 
+// Rate-limited logging helper (1 Hz max)
+static bool framegen_should_log(void) {
+    static uint64_t last_log_ns = 0;
+    uint64_t now = SDL_GetTicksNS();
+    if (now - last_log_ns >= 1000000000ULL) {  // 1 second = 1e9 ns
+        last_log_ns = now;
+        return true;
+    }
+    return false;
+}
+
 bool framegen_generate(void) {
     // (the frame after a real frame, generated from it - the intermediate to present: the warp of the scene with the
     // camera's half step ahead, the depth of the frame before, the HUD copied at the compositing - lands with the
@@ -117,7 +129,7 @@ bool framegen_generate(void) {
     // the frames between two real ones are generated. A rate the option didn't double (60 and above, the real frames')
     // aren't generated.)
     if (!framepace_gen_doubled()) return false;
-    LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
+    if (framegen_should_log()) if (framegen_should_log()) LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
     return true;
 }
 
@@ -127,7 +139,7 @@ void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageV
                                 VkExtent2D extent, const float vp[4][4]) {
     if (!framegen_enabled() || !framepace_gen_doubled()) return;
 
-    LOG("[framegen] store_prev_frame: color_view=%p, depth_view=%p, fg_has_prev_frame_before=%d\n",
+    if (framegen_should_log()) LOG("[framegen] store_prev_frame: color_view=%p, depth_view=%p, fg_has_prev_frame_before=%d\n",
         color_view, depth_view, fg_has_prev_frame);
 
     // Store previous frame's VP for half-step calculation
@@ -149,7 +161,7 @@ void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageV
     memcpy(fg_prev_vp, vp, sizeof fg_prev_vp);
     fg_has_prev_frame = true;
 
-    LOG("[framegen] store_prev_frame: fg_has_prev_frame_after=%d\n", fg_has_prev_frame);
+    if (framegen_should_log()) LOG("[framegen] store_prev_frame: fg_has_prev_frame_after=%d\n", fg_has_prev_frame);
 
     // Store color/depth images for warp
     fg_prev_color_image = color_image;
@@ -165,7 +177,7 @@ void framegen_store_prev_frame(VkCommandBuffer cb, VkImage color_image, VkImageV
 static void framegen_ensure_pipeline(void) {
     if (fg_pipeline_valid) return;
 
-    LOG("[framegen] creating pipeline...\n");
+    if (framegen_should_log()) LOG("[framegen] creating pipeline...\n");
 
     // Check if dynamic rendering is available (required for framegen)
     if (!g_vk.dyn_render) {
@@ -204,7 +216,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
-    LOG("[framegen] pipeline layout created\n");
+    if (framegen_should_log()) LOG("[framegen] pipeline layout created\n");
 
     // Descriptor pool
     VkDescriptorPoolSize pool_sizes[2] = {
@@ -222,7 +234,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
-    LOG("[framegen] descriptor pool created\n");
+    if (framegen_should_log()) LOG("[framegen] descriptor pool created\n");
 
     // Allocate descriptor set
     VkDescriptorSetAllocateInfo alloc_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -239,7 +251,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
-    LOG("[framegen] descriptor set allocated\n");
+    if (framegen_should_log()) LOG("[framegen] descriptor set allocated\n");
 
     // Shader modules
     size_t nv, nf;
@@ -297,7 +309,7 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
-    LOG("[framegen] shader modules created\n");
+    if (framegen_should_log()) LOG("[framegen] shader modules created\n");
 
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
@@ -332,7 +344,7 @@ static void framegen_ensure_pipeline(void) {
                                        .pMultisampleState = &ms, .pColorBlendState = &cb_info,
                                        .pDynamicState = &ds, .layout = fg_pipeline_layout,
                                        .renderPass = VK_NULL_HANDLE, .subpass = 0};
-    LOG("[framegen] creating graphics pipeline...\n");
+    if (framegen_should_log()) LOG("[framegen] creating graphics pipeline...\n");
     res = vkCreateGraphicsPipelines(g_vk.dev, VK_NULL_HANDLE, 1, &gp, NULL, &fg_pipeline);
     if (res != VK_SUCCESS) {
         LOG("[framegen] failed to create graphics pipeline: %d\n", res);
@@ -347,14 +359,14 @@ static void framegen_ensure_pipeline(void) {
         fg_desc_set_layout = VK_NULL_HANDLE;
         return;
     }
-    LOG("[framegen] graphics pipeline created\n");
+    if (framegen_should_log()) LOG("[framegen] graphics pipeline created\n");
 
     vkDestroyShaderModule(g_vk.dev, vs, NULL);
     vkDestroyShaderModule(g_vk.dev, fs, NULL);
 
     // Success! Mark pipeline as valid
     fg_pipeline_valid = true;
-    LOG("[framegen] pipeline created successfully\n");
+    if (framegen_should_log()) LOG("[framegen] pipeline created successfully\n");
 }
 
 // Update descriptor set with current frame's resources
@@ -433,7 +445,7 @@ void framegen_present_generated(VkCommandBuffer cb, VkImageView target_view, VkF
         return;
     }
 
-    LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
+    if (framegen_should_log()) LOG("[framegen] a frame is generated between two real ones (the option is on, the world is running)\n");
 
     // Update uniform buffer with VP matrices
     struct { float prev_vp[4][4]; float curr_vp[4][4]; float gen_vp[4][4]; float extent[2]; } *ub_data;

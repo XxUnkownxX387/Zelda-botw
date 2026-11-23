@@ -1042,8 +1042,10 @@ static TexBackend *tex_backend(NvnTexture *t) {
     create_image(t, b);
     t->backend = b;
     live_add(t, b);
-    LOG("[vk] VRAM: texture %p re-uploaded from guest memory (addr %llx, %llu MB)\n", (void *)t, (unsigned long long)t->addr,
-        (unsigned long long)(b->mem_size >> 20));
+    static uint64_t reupload_count = 0;
+    reupload_count++;
+    LOG("[vk] VRAM: texture %p re-uploaded from guest memory (addr %llx, %llu MB) [count=%llu]\n", (void *)t, (unsigned long long)t->addr,
+        (unsigned long long)(b->mem_size >> 20), (unsigned long long)reupload_count);
     return b;
 }
 

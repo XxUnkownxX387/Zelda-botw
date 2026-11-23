@@ -2237,6 +2237,20 @@ static VkRect2D scissor_rect(void);
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
     gpu_metrics_begin_pass();
+
+    // Frame pass counter for validation (LARECOMP_LOG_PASSES=1)
+    static uint64_t frame_pass_count = 0;
+    static uint64_t last_pass_frame = 0;
+    uint64_t cur_frame = renderer_present_count();
+    if (cur_frame != last_pass_frame) {
+        if (frame_pass_count > 0) {
+            LOG("[pass] frame %llu: %llu render passes\n", (unsigned long long)last_pass_frame, (unsigned long long)frame_pass_count);
+        }
+        last_pass_frame = cur_frame;
+        frame_pass_count = 0;
+    }
+    frame_pass_count++;
+
     pipeline_dirty = true;
     bool restart = in_pass && st.rt_dirty;  // (a pass that changes its render targets restarts)
     vk_end_pass();
