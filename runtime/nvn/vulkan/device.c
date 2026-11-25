@@ -387,8 +387,10 @@ static void pick_device(void) {
     g_vk.qfam = best_queue;
     uint32_t api = cap && g_vk.props.apiVersion > cap ? cap : g_vk.props.apiVersion;
     g_vk.api = api < VK_API_VERSION_1_3 ? VK_MAKE_API_VERSION(0, 1, VK_API_VERSION_MINOR(api), 0) : VK_API_VERSION_1_3;
-    LOG("[vk] using %s (Vulkan %u.%u%s)\n", g_vk.props.deviceName, VK_API_VERSION_MAJOR(g_vk.api),
-        VK_API_VERSION_MINOR(g_vk.api), g_vk.api < VK_API_VERSION_1_3 ? " with extensions for 1.3" : "");
+    LOG("[vk] using %s (Vulkan %u.%u%s, queue family %u, timestampValidBits=%u, timestampPeriod=%.3f ns)\n",
+        g_vk.props.deviceName, VK_API_VERSION_MAJOR(g_vk.api),
+        VK_API_VERSION_MINOR(g_vk.api), g_vk.api < VK_API_VERSION_1_3 ? " with extensions for 1.3" : "",
+        g_vk.qfam, g_vk.qfp.timestampValidBits, g_vk.props.limits.timestampPeriod);
 }
 #else
 static void pick_device(void) {
@@ -1942,6 +1944,10 @@ void backend_present(NvnTexture *t) {
     // VRAM budget eviction: once per frame, on render thread, after GPU work submitted
     extern void vram_budget_evict_if_needed(void);
     vram_budget_evict_if_needed();
+
+    // GPU metrics collection: once per frame
+    extern void gpu_metrics_collect(void *r);
+    gpu_metrics_collect(NULL);
 
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
