@@ -141,6 +141,55 @@ void android_log_file(bool on) {
     pthread_mutex_unlock(&g_logf_lock);
 }
 
+// Write the GPU metrics report (report.json) to the picked folder (same as log).
+// Called from benchmark.c when LARECOMP_GPU_METRICS=1.
+void android_write_gpu_report(const char *json) {
+    JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
+    if (!env) return;
+    jclass activity = (*env)->FindClass(env, "com/botwrecompandroid/BOTWRecompAndroidActivity");
+    if (!activity) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, activity, "writeReport", "(Ljava/lang/String;)I");
+    if (!m) return;
+    jstring jjson = (*env)->NewStringUTF(env, json);
+    if (!jjson) return;
+    (*env)->CallStaticIntMethod(env, activity, m, jjson);
+}
+
+// Periodic GPU metrics report writer (every 60 seconds).
+static pthread_t g_gpu_report_thread;
+static bool g_gpu_report_thread_running = false;
+
+static void *gpu_report_writer(void *arg) {
+    (void)arg;
+    while (g_gpu_report_thread_running) {
+        sleep(60);  // Wait 60 seconds
+        if (!g_gpu_report_thread_running) break;
+        extern bool gpu_metrics_enabled(void);
+        if (gpu_metrics_enabled()) {
+            extern void gpu_metrics_write_report(void);
+            gpu_metrics_write_report();
+        }
+    }
+    return NULL;
+}
+
+// Start the periodic GPU metrics report writer (called when GPU metrics are enabled).
+void android_start_gpu_report_writer(void) {
+    if (g_gpu_report_thread_running) return;
+    g_gpu_report_thread_running = true;
+    if (pthread_create(&g_gpu_report_thread, NULL, gpu_report_writer, NULL) == 0) {
+        pthread_detach(g_gpu_report_thread);
+        LOG("[gpu-metrics] periodic report writer started (every 60s)\n");
+    } else {
+        g_gpu_report_thread_running = false;
+    }
+}
+
+// Stop the periodic GPU metrics report writer (called on shutdown).
+void android_stop_gpu_report_writer(void) {
+    g_gpu_report_thread_running = false;
+}
+
 static void log_line(const char *line) {
     __android_log_write(ANDROID_LOG_INFO, "BOTWRecompAndroid", line);
     log_file_line(line);
@@ -796,6 +845,31 @@ JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nati
     // The save will be performed by the periodic thread or on next opportunity
     extern void vk_pipeline_cache_request_save(void);
     vk_pipeline_cache_request_save();
+}
+
+// Write the GPU metrics report (report.json) to the picked folder (same as log).
+// Called from C code (benchmark.c) when LARECOMP_GPU_METRICS=1.
+JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeWriteReport(
+        JNIEnv *env, jclass cls, jstring json) {
+    jclass activity = (*env)->FindClass(env, "com/botwrecompandroid/BOTWRecompAndroidActivity");
+    if (!activity) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, activity, "writeReport", "(Ljava/lang/String;)I");
+    if (!m) return;
+    const char *cjson = (*env)->GetStringUTFChars(env, json, NULL);
+    if (!cjson) return;
+    jstring jjson = (*env)->NewStringUTF(env, cjson);
+    (*env)->CallStaticIntMethod(env, activity, m, jjson);
+    (*env)->ReleaseStringUTFChars(env, json, cjson);
+}
+
+// Called from Java onPause to write GPU metrics report on clean shutdown.
+JNIEXPORT void JNICALL Java_com_botwrecompandroid_BOTWRecompAndroidActivity_nativeWriteGpuReport(
+        JNIEnv *env, jclass cls) {
+    (void)env; (void)cls;
+    extern void gpu_metrics_write_report(void);
+    gpu_metrics_write_report();
+    extern void android_stop_gpu_report_writer(void);
+    android_stop_gpu_report_writer();
 }
 
 static uint64_t read_u64(const char *path) {

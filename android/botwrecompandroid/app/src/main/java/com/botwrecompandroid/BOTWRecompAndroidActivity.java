@@ -76,6 +76,7 @@ private final Runnable report = new Runnable() {
     private static native void nativeDeviceStats(float battTempC, float battPct, float watts, int thermal, float headroom, int plugged);
     // Pipeline cache: save on pause
     private static native void nativeSavePipelineCache();
+    private static native void nativeWriteGpuReport();
     // the start screen (runtime/ui/launcher.mm)
     private static native int nativeGameVersion(byte[] head);
     private static native void nativeImportLooking();  // (the picked folder is being searched: busy, and said so)
@@ -175,6 +176,7 @@ private final Runnable report = new Runnable() {
         stats.removeCallbacks(report);
         if (watchMap != null) watchMap.pause();
         nativeSavePipelineCache();  // save Vulkan pipeline cache
+        nativeWriteGpuReport();     // write GPU metrics report
         super.onPause();
     }
 
@@ -571,6 +573,32 @@ private final Runnable report = new Runnable() {
             return -1;
         }
     }
+
+    // Write the GPU metrics report (report.json) to the picked folder (same as log).
+    // Returns 0 on success, -1 on failure.
+    public static int writeReport(String json) {
+        Uri tree = logTree();
+        if (tree == null) return -1;
+        try {
+            ContentResolver cr = self.getContentResolver();
+            String treeId = DocumentsContract.getTreeDocumentId(tree);
+            List<Doc> kids = self.children(tree, treeId);
+            Doc cur = named(kids, "report.json");
+            Uri file = cur != null ? DocumentsContract.buildDocumentUriUsingTree(tree, cur.id)
+                : DocumentsContract.createDocument(cr, DocumentsContract.buildDocumentUriUsingTree(tree, treeId), "application/json", "report.json");
+            if (file == null) return -1;
+            android.os.ParcelFileDescriptor pfd = cr.openFileDescriptor(file, "wt");
+            if (pfd == null) return -1;
+            java.io.OutputStream out = new android.os.ParcelFileDescriptor.AutoCloseOutputStream(pfd);
+            out.write(json.getBytes("UTF-8"));
+            out.close();
+            return 0;
+        } catch (Exception e) {
+            Log.w(TAG, "write report.json to picked folder", e);
+            return -1;
+        }
+    }
+
 
     // ---- saves (the start screen's Settings > Saves): this version's save_0 lives in Android/data/, out of file managers'
     // reach (issue #49: edited there for cheats, the changes didn't stick), and players bring saves from emulators

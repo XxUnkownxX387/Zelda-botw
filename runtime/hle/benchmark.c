@@ -217,6 +217,25 @@ static int win_cap;
 static volatile int win_n;
 static volatile bool win_on;
 
+// Forward declaration
+void gpu_metrics_write_report(void);
+extern bool gpu_metrics_enabled(void);
+
+// GPU metrics pass structure (must match exec.c)
+typedef struct {
+    char name[32];
+    uint64_t draw_calls;
+    uint64_t start_gpu_ticks;
+    uint64_t end_gpu_ticks;
+    uint64_t start_gpu_ns;
+    uint64_t end_gpu_ns;
+    uint64_t start_host_ns;
+    uint64_t end_host_ns;
+    double duration_ms;
+} GpuMetricsPass;
+
+extern GpuMetricsPass gpu_metrics_passes[256];
+
 // ------------------------------------------------------------------ the report
 static double median(double *v, int n) {
     for (int i = 1; i < n; i++) {
@@ -315,7 +334,7 @@ static void json_passport(FILE *f) {
     extern bool vk_fragment_shading_rate(void), vk_astc_hdr(void), vk_maintenance5(void), vk_sync2(void),
                 vk_dynamic_rendering(void), vk_external_memory_host(void), vk_map_memory_placed(void),
                 vk_external_memory_fd(void), vk_external_memory_dmabuf(void), vk_feedback_loop_layout(void);
-    extern int vk_mali_driver_major(void), vk_mali_driver_minor(void), vk_mem_strategy(void);
+    extern uint32_t vk_mali_driver_major(void), vk_mali_driver_minor(void), vk_mem_strategy(void);
     static Power power;
     static int spirv = -1;
     static long pipelines = -1;
@@ -507,6 +526,76 @@ static void write_report(const char *status) {
     fclose(f);
     snprintf(path, sizeof path, "%s/report.csv", out_dir);
     rename(tmp, path);
+}
+
+// Write the GPU metrics report (report.json) to the picked folder (same as log).
+// Called periodically (every 60s) and on clean shutdown when LARECOMP_GPU_METRICS=1.
+void gpu_metrics_write_report(void) {
+    if (!gpu_metrics_enabled()) return;
+
+    extern int gpu_metrics_pass_count;
+    extern uint64_t gpu_metrics_draw_calls_total;
+    extern double gpu_metrics_gbuffer_ms;
+    extern double gpu_metrics_shadow_ms;
+    extern double gpu_metrics_post_ms;
+    extern double gpu_metrics_lighting_ms;
+    extern double gpu_metrics_other_ms;
+    extern uint64_t gpu_metrics_texture_memory_bc1;
+    extern uint64_t gpu_metrics_texture_memory_astc;
+    extern uint64_t gpu_metrics_texture_memory_rgba8;
+    extern uint64_t gpu_metrics_texture_memory_bc4;
+    extern uint64_t gpu_metrics_texture_memory_bc5;
+    extern uint64_t gpu_metrics_texture_memory_bc7;
+    extern uint64_t gpu_metrics_texture_memory_other;
+    extern uint64_t vram_reupload_after_eviction(void);
+    extern uint64_t vram_reupload_guest_rewrite(void);
+    extern uint32_t vk_api_version(void);
+
+    // Generate JSON
+    char json[16384];
+    char *p = json;
+    char *end = json + sizeof(json) - 1;
+
+    p += snprintf(p, end - p, "{");
+    p += snprintf(p, end - p, "\"timestamp_ns\":%llu,", (unsigned long long)plat_now_ns());
+    p += snprintf(p, end - p, "\"gpu_metrics\":{");
+    p += snprintf(p, end - p, "\"pass_count\":%d,", gpu_metrics_pass_count);
+    p += snprintf(p, end - p, "\"draw_calls_total\":%llu,", (unsigned long long)gpu_metrics_draw_calls_total);
+    p += snprintf(p, end - p, "\"passes\":[");
+    for (int i = 0; i < gpu_metrics_pass_count && i < 256; i++) {
+        p += snprintf(p, end - p, "{\"name\":\"%s\",\"draw_calls\":%llu,\"start_gpu_ticks\":%llu,\"end_gpu_ticks\":%llu,"
+                "\"start_gpu_ns\":%llu,\"end_gpu_ns\":%llu,\"start_host_ns\":%llu,\"end_host_ns\":%llu,"
+                "\"duration_ms\":%.3f}",
+                gpu_metrics_passes[i].name,
+                (unsigned long long)gpu_metrics_passes[i].draw_calls,
+                (unsigned long long)gpu_metrics_passes[i].start_gpu_ticks,
+                (unsigned long long)gpu_metrics_passes[i].end_gpu_ticks,
+                (unsigned long long)gpu_metrics_passes[i].start_gpu_ns,
+                (unsigned long long)gpu_metrics_passes[i].end_gpu_ns,
+                (unsigned long long)gpu_metrics_passes[i].start_host_ns,
+                (unsigned long long)gpu_metrics_passes[i].end_host_ns,
+                gpu_metrics_passes[i].duration_ms);
+        if (i + 1 < gpu_metrics_pass_count && i + 1 < 256) p += snprintf(p, end - p, ",");
+    }
+    p += snprintf(p, end - p, "],");
+    p += snprintf(p, end - p, "\"gpu_time_ms\":{\"gbuffer\":%.3f,\"shadow\":%.3f,\"post\":%.3f,\"lighting\":%.3f,\"other\":%.3f},",
+            gpu_metrics_gbuffer_ms, gpu_metrics_shadow_ms, gpu_metrics_post_ms, gpu_metrics_lighting_ms, gpu_metrics_other_ms);
+    p += snprintf(p, end - p, "\"texture_memory\":{\"bc1\":%llu,\"astc\":%llu,\"rgba8\":%llu,\"bc4\":%llu,\"bc5\":%llu,\"bc7\":%llu,\"other\":%llu},",
+            (unsigned long long)gpu_metrics_texture_memory_bc1,
+            (unsigned long long)gpu_metrics_texture_memory_astc,
+            (unsigned long long)gpu_metrics_texture_memory_rgba8,
+            (unsigned long long)gpu_metrics_texture_memory_bc4,
+            (unsigned long long)gpu_metrics_texture_memory_bc5,
+            (unsigned long long)gpu_metrics_texture_memory_bc7,
+            (unsigned long long)gpu_metrics_texture_memory_other);
+    p += snprintf(p, end - p, "\"reuploads\":{\"after_eviction\":%llu,\"guest_rewrite\":%llu}",
+            (unsigned long long)vram_reupload_after_eviction(),
+            (unsigned long long)vram_reupload_guest_rewrite());
+    p += snprintf(p, end - p, "}}");
+
+    // Write to picked folder via JNI
+    extern void android_write_gpu_report(const char *json);
+    android_write_gpu_report(json);
 }
 
 // ------------------------------------------------------------------ the scene file
@@ -880,7 +969,7 @@ static Result *measure(void) {
                     vk_submissions(void), vk_image_copies(void), vk_buffer_copies(void);
     extern int vk_pss_mb(void);
     extern const char *vk_gpu_desc(void), *vk_driver_desc(void), *vk_driver_version(void);
-    extern int vk_api_version(void), vk_mali_driver_major(void), vk_mali_driver_minor(void), vk_mem_strategy(void);
+    extern uint32_t vk_api_version(void), vk_mali_driver_major(void), vk_mali_driver_minor(void), vk_mem_strategy(void);
     extern bool vk_fragment_shading_rate(void), vk_astc_hdr(void), vk_maintenance5(void), vk_sync2(void),
                 vk_dynamic_rendering(void), vk_external_memory_host(void), vk_map_memory_placed(void),
                 vk_external_memory_fd(void), vk_external_memory_dmabuf(void), vk_feedback_loop_layout(void);
@@ -996,17 +1085,7 @@ static Result *measure(void) {
     extern bool gpu_metrics_enabled(void);
     extern int gpu_metrics_pass_count;
     extern uint64_t gpu_metrics_draw_calls_total;
-    extern struct { 
-        char name[32]; 
-        uint64_t draw_calls; 
-        uint64_t start_gpu_ticks; 
-        uint64_t end_gpu_ticks; 
-        uint64_t start_gpu_ns; 
-        uint64_t end_gpu_ns; 
-        uint64_t start_host_ns; 
-        uint64_t end_host_ns; 
-        double duration_ms; 
-    } gpu_metrics_passes[32];
+    extern GpuMetricsPass gpu_metrics_passes[256];
     extern uint64_t gpu_metrics_draw_calls_total;
     extern uint64_t gpu_metrics_texture_memory_bc1;
     extern uint64_t gpu_metrics_texture_memory_astc;

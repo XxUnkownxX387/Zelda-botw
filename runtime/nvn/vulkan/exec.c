@@ -1827,6 +1827,11 @@ void vk_exec_init(void) {
             LOG("[gpu-metrics] query pool creation failed\n");
         } else {
             LOG("[gpu-metrics] enabled: %d query pools with 512 queries each (256 passes/frame)\n", SUBS);
+            // Start periodic report writer (every 60s) on Android
+#ifdef __ANDROID__
+            extern void android_start_gpu_report_writer(void);
+            android_start_gpu_report_writer();
+#endif
         }
     }
     st_defaults();
