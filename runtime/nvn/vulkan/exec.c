@@ -1426,7 +1426,7 @@ struct {
     uint64_t start_gpu_ns;        // start time in nanoseconds (converted with timestampPeriod)
     uint64_t end_gpu_ns;          // end time in nanoseconds (converted with timestampPeriod)
     double duration_ms;           // pass duration in milliseconds
-} gpu_metrics_passes[32];
+} gpu_metrics_passes[256];
 uint64_t gpu_metrics_texture_memory_bc1 = 0;
 uint64_t gpu_metrics_texture_memory_astc = 0;
 uint64_t gpu_metrics_texture_memory_rgba8 = 0;
@@ -1434,7 +1434,10 @@ uint64_t gpu_metrics_texture_memory_bc4 = 0;
 uint64_t gpu_metrics_texture_memory_bc5 = 0;
 uint64_t gpu_metrics_texture_memory_bc7 = 0;
 uint64_t gpu_metrics_texture_memory_other = 0;
-static VkQueryPool gpu_metrics_qp = VK_NULL_HANDLE;
+// One query pool per frame in flight (SUBS), each with 256 passes * 2 = 512 queries
+static VkQueryPool gpu_metrics_qp[SUBS] = { VK_NULL_HANDLE };
+// Submission sequence for each frame in flight (to wait on before reading results)
+static uint64_t gpu_metrics_seq[SUBS] = { 0 };
 
 // Per-frame GPU time sums by pass type (ms)
 double gpu_metrics_gbuffer_ms = 0;
@@ -1471,9 +1474,9 @@ void gpu_metrics_begin_pass(void) {
     if (!gpu_metrics_enabled()) return;
     gpu_metrics_on = true;
 
-    // Bounds check: gpu_metrics_passes has 32 elements (max 32 passes per frame)
-    if (gpu_metrics_pass_count >= 32) {
-        LOG("[gpu-metrics] begin_pass: pass_count %d >= 32, skipping\n", gpu_metrics_pass_count);
+    // Bounds check: gpu_metrics_passes has 256 elements
+    if (gpu_metrics_pass_count >= 256) {
+        // Silently skip - this frame has more passes than we can track
         return;
     }
 
@@ -1495,12 +1498,11 @@ void gpu_metrics_begin_pass(void) {
     gpu_metrics_passes[gpu_metrics_pass_count].start_gpu_ns = 0;
     gpu_metrics_passes[gpu_metrics_pass_count].end_gpu_ns = 0;
 
-    // Write GPU timestamp at pass start
-    if (gpu_metrics_qp != VK_NULL_HANDLE) {
+    // Write GPU timestamp at pass start (using current frame's query pool)
+    VkQueryPool qp = gpu_metrics_qp[cur_sub];
+    if (qp != VK_NULL_HANDLE) {
         uint32_t query_index = gpu_metrics_pass_count * 2;
-        LOG("[gpu-metrics] vkCmdWriteTimestamp2 BEGIN pass=%d query=%u\n", gpu_metrics_pass_count, query_index);
-        vkCmdWriteTimestamp2(vk_cmd(), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, gpu_metrics_qp, query_index);
-        LOG("[gpu-metrics] vkCmdWriteTimestamp2 BEGIN done\n");
+        vkCmdWriteTimestamp2(vk_cmd(), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, qp, query_index);
     }
 }
 
@@ -1508,17 +1510,15 @@ void gpu_metrics_end_pass(void) {
     if (!gpu_metrics_on) return;
 
     // Bounds check
-    if (gpu_metrics_pass_count >= 32) {
-        LOG("[gpu-metrics] end_pass: pass_count %d >= 32, skipping\n", gpu_metrics_pass_count);
+    if (gpu_metrics_pass_count >= 256) {
         return;
     }
 
     // Write GPU timestamp at pass end
-    if (gpu_metrics_qp != VK_NULL_HANDLE) {
+    VkQueryPool qp = gpu_metrics_qp[cur_sub];
+    if (qp != VK_NULL_HANDLE) {
         uint32_t query_index = gpu_metrics_pass_count * 2 + 1;
-        LOG("[gpu-metrics] vkCmdWriteTimestamp2 END pass=%d query=%u\n", gpu_metrics_pass_count, query_index);
-        vkCmdWriteTimestamp2(vk_cmd(), VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, gpu_metrics_qp, query_index);
-        LOG("[gpu-metrics] vkCmdWriteTimestamp2 END done\n");
+        vkCmdWriteTimestamp2(vk_cmd(), VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, qp, query_index);
     }
 
     uint64_t end_host_ns = SDL_GetTicksNS();
@@ -1556,28 +1556,40 @@ void gpu_metrics_collect_texture(uint32_t format, uint64_t bytes) {
 }
 
 void gpu_metrics_collect(void *r) {
-    if (!gpu_metrics_on || gpu_metrics_qp == VK_NULL_HANDLE || gpu_metrics_pass_count == 0) return;
+    if (!gpu_metrics_on || gpu_metrics_pass_count == 0) return;
 
-    // Bounds check: gpu_metrics_passes has 32 elements
-    if (gpu_metrics_pass_count > 32) {
-        LOG("[gpu-metrics] pass_count %d exceeds max 32, clamping\n", gpu_metrics_pass_count);
-        gpu_metrics_pass_count = 32;
+    // Bounds check: gpu_metrics_passes has 256 elements
+    if (gpu_metrics_pass_count > 256) {
+        gpu_metrics_pass_count = 256;
     }
 
-    // Resolve GPU timestamps (raw ticks)
-    uint64_t timestamps[64];
-    LOG("[gpu-metrics] vkGetQueryPoolResults: pass_count=%d, query_count=%d\n", gpu_metrics_pass_count, gpu_metrics_pass_count * 2);
-    VkResult result = vkGetQueryPoolResults(g_vk.dev, gpu_metrics_qp, 0, gpu_metrics_pass_count * 2,
-                                             sizeof timestamps, timestamps, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-    if (result != VK_SUCCESS) {
-        LOG("[gpu-metrics] timestamp query failed: %d\n", result);
-        // Reset for next frame anyway
+    // Use the query pool for the frame that just completed (cur_sub - 1)
+    // The current frame is being recorded in cur_sub, so the previous frame is (cur_sub - 1) % SUBS
+    int completed_sub = (cur_sub - 1 + SUBS) % SUBS;
+    VkQueryPool qp = gpu_metrics_qp[completed_sub];
+    uint64_t seq = gpu_metrics_seq[completed_sub];
+
+    if (qp == VK_NULL_HANDLE || seq == 0) {
+        // No query pool or no submission to wait on
         gpu_metrics_pass_count = 0;
-        LOG("[gpu-metrics] vkCmdResetQueryPool after failure\n");
-        vkCmdResetQueryPool(vk_cmd(), gpu_metrics_qp, 0, 64);
+        gpu_metrics_draw_calls_total = 0;
         return;
     }
-    LOG("[gpu-metrics] vkGetQueryPoolResults succeeded\n");
+
+    // Wait for the GPU to finish the frame that wrote these timestamps
+    // This ensures vkGetQueryPoolResults won't return VK_NOT_READY
+    vk_wait_seq(seq);
+
+    // Resolve GPU timestamps (raw ticks)
+    uint64_t timestamps[512];  // 256 passes * 2
+    VkResult result = vkGetQueryPoolResults(g_vk.dev, qp, 0, gpu_metrics_pass_count * 2,
+                                             sizeof timestamps, timestamps, 8, VK_QUERY_RESULT_64_BIT);
+    if (result != VK_SUCCESS) {
+        // Query failed - just reset and continue
+        gpu_metrics_pass_count = 0;
+        gpu_metrics_draw_calls_total = 0;
+        return;
+    }
 
     // timestampValidBits from VkQueueFamilyProperties (graphics queue)
     uint32_t valid_bits = g_vk.qfp.timestampValidBits;
@@ -1616,9 +1628,8 @@ void gpu_metrics_collect(void *r) {
     gpu_metrics_lighting_ms = lighting_ms;
     gpu_metrics_other_ms = other_ms;
 
-    // Reset for next frame
-    LOG("[gpu-metrics] vkCmdResetQueryPool for next frame\n");
-    vkCmdResetQueryPool(vk_cmd(), gpu_metrics_qp, 0, 64);
+    // Reset query pool for reuse (this frame's pool will be reused in SUBS frames)
+    vkCmdResetQueryPool(vk_cmd(), qp, 0, 512);
     gpu_metrics_pass_count = 0;
     gpu_metrics_draw_calls_total = 0;
 }
@@ -1799,15 +1810,23 @@ void vk_exec_init(void) {
         VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = SUBS * 2};
         if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &prof_qp) != VK_SUCCESS) prof_qp = VK_NULL_HANDLE;
     }
-    // GPU metrics query pool (LARECOMP_GPU_METRICS=1)
+    // GPU metrics query pool (LARECOMP_GPU_METRICS=1) - one pool per frame in flight
     if (gpu_metrics_enabled()) {
-        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 64};
-        LOG("[gpu-metrics] vkCreateQueryPool: queryCount=64\n");
-        if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &gpu_metrics_qp) != VK_SUCCESS) {
-            gpu_metrics_qp = VK_NULL_HANDLE;
+        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 512};
+        for (int i = 0; i < SUBS; i++) {
+            if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &gpu_metrics_qp[i]) != VK_SUCCESS) {
+                gpu_metrics_qp[i] = VK_NULL_HANDLE;
+            }
+        }
+        // Check if all pools failed
+        bool all_failed = true;
+        for (int i = 0; i < SUBS; i++) {
+            if (gpu_metrics_qp[i] != VK_NULL_HANDLE) { all_failed = false; break; }
+        }
+        if (all_failed) {
             LOG("[gpu-metrics] query pool creation failed\n");
         } else {
-            LOG("[gpu-metrics] vkCreateQueryPool succeeded\n");
+            LOG("[gpu-metrics] enabled: %d query pools with 512 queries each (256 passes/frame)\n", SUBS);
         }
     }
     st_defaults();
