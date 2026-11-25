@@ -174,15 +174,10 @@ static void *gpu_report_writer(void *arg) {
 }
 
 // Start the periodic GPU metrics report writer (called when GPU metrics are enabled).
+// DISABLED: periodic thread caused SIGSEGV at frame 973 (race on gpu_metrics_passes / texture counters).
+// Report is still written on clean shutdown (onPause).
 void android_start_gpu_report_writer(void) {
-    if (g_gpu_report_thread_running) return;
-    g_gpu_report_thread_running = true;
-    if (pthread_create(&g_gpu_report_thread, NULL, gpu_report_writer, NULL) == 0) {
-        pthread_detach(g_gpu_report_thread);
-        LOG("[gpu-metrics] periodic report writer started (every 60s)\n");
-    } else {
-        g_gpu_report_thread_running = false;
-    }
+    LOG("[gpu-metrics] periodic report writer DISABLED (crash fix)\n");
 }
 
 // Stop the periodic GPU metrics report writer (called on shutdown).
