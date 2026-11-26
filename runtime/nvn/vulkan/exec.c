@@ -97,6 +97,9 @@ static Sub subs[SUBS];
 static int cur_sub;
 static void ss_forget(void);
 static uint64_t submit_seq;  // last submitted
+bool gpu_metrics_enabled(void);  // forward declaration for use in submission path
+// GPU metrics: submission sequence per frame-in-flight (defined in GPU metrics section)
+static uint64_t gpu_metrics_seq[SUBS];
 #ifdef __ANDROID__
 // The last submission with the game's commands in it (backend_execute's), and whether some are not submitted yet.
 // The game's fences (nvnQueueFenceSync) right after its submission went to the next one - the window's present,
@@ -922,6 +925,10 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
     }
     pthread_mutex_lock(&seq_lock);
     submit_seq++;
+    // Store submission sequence for GPU metrics (so gpu_metrics_collect can wait on it)
+    if (gpu_metrics_enabled()) {
+        gpu_metrics_seq[cur_sub] = submit_seq;
+    }
 #ifdef __ANDROID__
     last_submit_ns = SDL_GetTicksNS();
     if (game_pending) work_seq = submit_seq;  // (cleared when backend_execute is done: flushes inside it come first)
@@ -1437,7 +1444,8 @@ uint64_t gpu_metrics_texture_memory_other = 0;
 // One query pool per frame in flight (SUBS), each with 256 passes * 2 = 512 queries
 static VkQueryPool gpu_metrics_qp[SUBS] = { VK_NULL_HANDLE };
 // Submission sequence for each frame in flight (to wait on before reading results)
-static uint64_t gpu_metrics_seq[SUBS] = { 0 };
+// (declared at line 102, before submission path)
+extern uint64_t gpu_metrics_seq[SUBS];
 
 // Per-frame GPU time sums by pass type (ms)
 double gpu_metrics_gbuffer_ms = 0;
@@ -1478,6 +1486,15 @@ void gpu_metrics_begin_pass(void) {
     if (gpu_metrics_pass_count >= 256) {
         // Silently skip - this frame has more passes than we can track
         return;
+    }
+
+    // First pass of the frame: reset the query pool for this frame (cur_sub)
+    // The command buffer is guaranteed to be in recording state here
+    if (gpu_metrics_pass_count == 0) {
+        VkQueryPool qp = gpu_metrics_qp[cur_sub];
+        if (qp != VK_NULL_HANDLE) {
+            vkCmdResetQueryPool(vk_cmd(), qp, 0, 512);
+        }
     }
 
     const char *pass_name = "unknown";
@@ -1584,10 +1601,16 @@ void gpu_metrics_collect(void *r) {
     uint64_t timestamps[512];  // 256 passes * 2
     VkResult result = vkGetQueryPoolResults(g_vk.dev, qp, 0, gpu_metrics_pass_count * 2,
                                              sizeof timestamps, timestamps, 8, VK_QUERY_RESULT_64_BIT);
+    if (result == VK_NOT_READY) {
+        // GPU not done yet - this shouldn't happen after vk_wait_seq, but handle gracefully
+        // Don't reset counters, try again next frame
+        return;
+    }
     if (result != VK_SUCCESS) {
-        // Query failed - just reset and continue
+        // Other error - reset and continue
         gpu_metrics_pass_count = 0;
         gpu_metrics_draw_calls_total = 0;
+        vkCmdResetQueryPool(vk_cmd(), qp, 0, 512);
         return;
     }
 
@@ -1628,8 +1651,8 @@ void gpu_metrics_collect(void *r) {
     gpu_metrics_lighting_ms = lighting_ms;
     gpu_metrics_other_ms = other_ms;
 
-    // Reset query pool for reuse (this frame's pool will be reused in SUBS frames)
-    vkCmdResetQueryPool(vk_cmd(), qp, 0, 512);
+    // Don't reset query pool here - it's reset at the start of the next frame
+    // when that query pool is reused (in gpu_metrics_begin_pass)
     gpu_metrics_pass_count = 0;
     gpu_metrics_draw_calls_total = 0;
 }
