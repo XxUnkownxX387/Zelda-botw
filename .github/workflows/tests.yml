@@ -107,10 +107,15 @@ jobs:
           echo "=== Debug: checking directory structure ==="
           ls -la android/botwrecompandroid/app/.cxx/ 2>/dev/null || echo "No .cxx dir"
           ls -la android/botwrecompandroid/app/.cxx/Debug/ 2>/dev/null || echo "No Debug dir"
+          echo "=== Contents of Debug/6j71xa2c/ ==="
+          ls -la android/botwrecompandroid/app/.cxx/Debug/6j71xa2c/ 2>/dev/null || echo "No 6j71xa2c dir"
+          ls -la android/botwrecompandroid/app/.cxx/Debug/6j71xa2c/arm64-v8a/ 2>/dev/null || echo "No arm64-v8a dir"
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f 2>/dev/null
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f 2>/dev/null | head -1 | xargs -I {} cp {} /tmp/libmain-unstripped.so
           # Also try the full path with arm64-v8a
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -path "*/arm64-v8a/*" -type f 2>/dev/null | head -1 | xargs -I {} cp {} /tmp/libmain-unstripped.so
+          # Try direct path
+          cp android/botwrecompandroid/app/.cxx/Debug/6j71xa2c/arm64-v8a/libmain.so /tmp/libmain-unstripped.so 2>/dev/null || echo "Direct copy failed"
           ls -la /tmp/libmain-unstripped.so
       - name: Upload unstripped libmain.so for addr2line
         uses: actions/upload-artifact@v4
@@ -244,10 +249,15 @@ jobs:
           echo "=== Debug: checking directory structure ==="
           ls -la android/botwrecompandroid/app/.cxx/ 2>/dev/null || echo "No .cxx dir"
           ls -la android/botwrecompandroid/app/.cxx/Debug/ 2>/dev/null || echo "No Debug dir"
+          echo "=== Contents of Debug/6j71xa2c/ ==="
+          ls -la android/botwrecompandroid/app/.cxx/Debug/6j71xa2c/ 2>/dev/null || echo "No 6j71xa2c dir"
+          ls -la android/botwrecompandroid/app/.cxx/Debug/6j71xa2c/arm64-v8a/ 2>/dev/null || echo "No arm64-v8a dir"
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f 2>/dev/null
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f 2>/dev/null | head -1 | xargs -I {} cp {} /tmp/libmain-unstripped.so
           # Also try the full path with arm64-v8a
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -path "*/arm64-v8a/*" -type f 2>/dev/null | head -1 | xargs -I {} cp {} /tmp/libmain-unstripped.so
+          # Try direct path
+          cp android/botwrecompandroid/app/.cxx/Debug/6j71xa2c/arm64-v8a/libmain.so /tmp/libmain-unstripped.so 2>/dev/null || echo "Direct copy failed"
           ls -la /tmp/libmain-unstripped.so
       - name: Upload unstripped libmain.so for addr2line
         uses: actions/upload-artifact@v4
