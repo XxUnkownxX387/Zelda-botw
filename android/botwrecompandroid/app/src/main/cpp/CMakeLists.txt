@@ -72,3 +72,10 @@ target_compile_options(main PRIVATE -O2 -g -fno-strict-aliasing -Wall -Wno-unuse
 target_link_libraries(main PRIVATE SDL3 shaderc_shared adrenotools android log dl m)
 # (runtime/hle.h, ipc.h, main.c: tables in named sections found through __start_ / __stop_ symbols)
 target_link_options(main PRIVATE -Wl,-z,nostart-stop-gc)
+# Preserve unstripped libmain.so for addr2line (CI upload)
+set_target_properties(main PROPERTIES STRIP FALSE)
+# Copy unstripped libmain.so to fixed location for CI upload
+add_custom_command(TARGET main POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:main> ${CMAKE_BINARY_DIR}/libmain-unstripped.so
+    COMMENT "Copy unstripped libmain.so for addr2line CI upload"
+)
