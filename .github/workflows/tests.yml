@@ -104,6 +104,8 @@ jobs:
 
       - name: Copy unstripped libmain.so for addr2line
         run: |
+          echo "Searching for libmain.so..."
+          find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f | head -1 | xargs -I {} cp {} /tmp/libmain-unstripped.so
           ls -la /tmp/libmain-unstripped.so
       - name: Upload unstripped libmain.so for addr2line
@@ -235,6 +237,8 @@ jobs:
 
       - name: Copy unstripped libmain.so for addr2line
         run: |
+          echo "Searching for libmain.so..."
+          find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f
           find android/botwrecompandroid/app/.cxx/Debug -name "libmain.so" -type f | head -1 | xargs -I {} cp {} /tmp/libmain-unstripped.so
           ls -la /tmp/libmain-unstripped.so
       - name: Upload unstripped libmain.so for addr2line
