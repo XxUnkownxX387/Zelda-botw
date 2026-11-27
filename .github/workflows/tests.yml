@@ -106,7 +106,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: libmain-unstripped
-          path: android/botwrecompandroid/app/.cxx/Debug/*/arm64-v8a/libmain.so
+          path: android/botwrecompandroid/app/.cxx/Debug/**/arm64-v8a/libmain.so
           if-no-files-found: warn
 
   build-apk-full:
@@ -233,5 +233,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: libmain-unstripped
-          path: android/botwrecompandroid/app/.cxx/Debug/*/arm64-v8a/libmain.so
+          path: android/botwrecompandroid/app/.cxx/Debug/**/arm64-v8a/libmain.so
           if-no-files-found: warn
