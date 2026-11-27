@@ -102,6 +102,13 @@ jobs:
           path: android/botwrecompandroid/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
+      - name: Upload unstripped libmain.so for addr2line
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmain-unstripped
+          path: android/botwrecompandroid/app/.cxx/Debug/*/arm64-v8a/libmain.so
+          if-no-files-found: warn
+
   build-apk-full:
     name: Build APK Full (assembleDebug) — with FFmpeg + gen deps
     runs-on: ubuntu-latest
@@ -221,3 +228,10 @@ jobs:
           name: botwrecompandroid-debug-full
           path: android/botwrecompandroid/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Upload unstripped libmain.so for addr2line
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmain-unstripped
+          path: android/botwrecompandroid/app/.cxx/Debug/*/arm64-v8a/libmain.so
+          if-no-files-found: warn
